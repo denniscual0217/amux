@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import net from "node:net";
 import process from "node:process";
-import { getSocketPath, startServer } from "./server.js";
-import { ApiRequest, ApiResponse } from "./types.js";
+import { WebSocket } from "ws";
+import { getSocketPath, getStreamPortFromConfig, startServer } from "./server.js";
+import { ApiRequest, ApiResponse, StreamMessage } from "./types.js";
 
 function printUsage(): void {
   console.error(
@@ -12,6 +13,7 @@ function printUsage(): void {
       "  amux spawn -s <name> -e <command> [--cwd dir] [--on-exit url] [--input text]",
       "  amux list",
       "  amux tail <session> [--lines N] [--strip-ansi]",
+      "  amux stream <session> [--pane N]",
       "  amux write <session> <data>",
       "  amux kill <session>",
     ].join("\n"),
@@ -101,9 +103,25 @@ async function main(): Promise<void> {
 
   if (command === "start") {
     const socketPath = getSocketPath();
-    await startServer(socketPath);
-    process.stdout.write(`amux listening on ${socketPath}\n`);
+    const streamPort = getStreamPortFromConfig();
+    await startServer(socketPath, streamPort);
+    process.stdout.write(`amux listening on ${socketPath} and ws://127.0.0.1:${streamPort}\n`);
     return await new Promise(() => undefined);
+  }
+
+  if (command === "stream") {
+    const session = args.shift();
+    if (!session) {
+      throw new Error("stream requires <session>");
+    }
+
+    const paneValue = takeOption(args, ["--pane"]);
+    const pane = paneValue ? Number.parseInt(paneValue, 10) : 0;
+    if (Number.isNaN(pane)) {
+      throw new Error("--pane must be a number");
+    }
+    await streamSession(session, pane);
+    return;
   }
 
   let request: ApiRequest;
@@ -167,6 +185,45 @@ async function main(): Promise<void> {
 
   const response = await send(request);
   formatOutput(response);
+}
+
+async function streamSession(session: string, pane: number): Promise<void> {
+  const port = getStreamPortFromConfig();
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", () => resolve());
+    socket.once("error", reject);
+  });
+
+  socket.send(JSON.stringify({ cmd: "subscribe", session, pane }));
+
+  await new Promise<void>((resolve, reject) => {
+    socket.on("message", (chunk) => {
+      const message = JSON.parse(chunk.toString("utf8")) as StreamMessage;
+
+      switch (message.event) {
+        case "output":
+          process.stdout.write(message.data);
+          break;
+        case "exit":
+          process.stderr.write(
+            `\n[amux] pane ${message.session}:${message.pane} exited with code ${message.code ?? "null"} after ${message.duration}\n`,
+          );
+          socket.close();
+          break;
+        case "error":
+          reject(new Error(message.message));
+          socket.close();
+          break;
+        default:
+          break;
+      }
+    });
+
+    socket.once("close", () => resolve());
+    socket.once("error", reject);
+  });
 }
 
 void main().catch((error: unknown) => {

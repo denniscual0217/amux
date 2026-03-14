@@ -2,6 +2,7 @@ import os from "node:os";
 import process from "node:process";
 import http from "node:http";
 import https from "node:https";
+import { EventEmitter } from "node:events";
 import { URL } from "node:url";
 import * as pty from "node-pty";
 import {
@@ -21,7 +22,7 @@ export function stripAnsi(value: string): string {
   return value.replace(ANSI_PATTERN, "");
 }
 
-function formatDuration(durationMs: number): string {
+export function formatDuration(durationMs: number): string {
   const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -69,7 +70,16 @@ async function postExitCallback(
   });
 }
 
-export class Pane {
+export interface PaneDataEvent {
+  chunk: string;
+}
+
+export interface PaneExitEvent {
+  code: number | null;
+  duration: string;
+}
+
+export class Pane extends EventEmitter {
   private readonly terminal: pty.IPty;
   private readonly outputLines: string[] = [];
   private partialLine = "";
@@ -89,6 +99,7 @@ export class Pane {
     command: string,
     options: SpawnOptions,
   ) {
+    super();
     this.id = id;
     this.command = command;
     this.cwd = options.cwd;
@@ -107,12 +118,17 @@ export class Pane {
 
     this.terminal.onData((chunk) => {
       this.capture(chunk);
+      this.emit("data", { chunk } satisfies PaneDataEvent);
     });
 
     this.terminal.onExit(({ exitCode }) => {
       this.flushPartialLine();
       this.exitCodeValue = exitCode;
       this.endedAtDate = new Date();
+      this.emit("exit", {
+        code: this.exitCodeValue,
+        duration: formatDuration(this.durationMs),
+      } satisfies PaneExitEvent);
       void this.notifyExit();
     });
 

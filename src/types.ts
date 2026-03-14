@@ -118,3 +118,73 @@ export interface ApiError {
 }
 
 export type ApiResponse<T = unknown> = ApiSuccess<T> | ApiError;
+
+export interface StreamSubscribeCommand {
+  cmd: "subscribe";
+  session: string;
+  pane?: number;
+}
+
+export interface StreamUnsubscribeCommand {
+  cmd: "unsubscribe";
+  session: string;
+  pane?: number;
+}
+
+export interface StreamListCommand {
+  cmd: "streams";
+}
+
+export type StreamCommand =
+  | StreamSubscribeCommand
+  | StreamUnsubscribeCommand
+  | StreamListCommand;
+
+export interface StreamOutputEvent {
+  event: "output";
+  session: string;
+  pane: number;
+  data: string;
+}
+
+export interface StreamExitEvent {
+  event: "exit";
+  session: string;
+  pane: number;
+  code: number | null;
+  duration: string;
+}
+
+export interface StreamSubscribedEvent {
+  event: "subscribed";
+  session: string;
+  pane: number;
+}
+
+export interface StreamUnsubscribedEvent {
+  event: "unsubscribed";
+  session: string;
+  pane: number;
+}
+
+export interface StreamListEvent {
+  event: "streams";
+  streams: Array<{
+    session: string;
+    pane: number;
+    subscribers: number;
+  }>;
+}
+
+export interface StreamErrorEvent {
+  event: "error";
+  message: string;
+}
+
+export type StreamMessage =
+  | StreamOutputEvent
+  | StreamExitEvent
+  | StreamSubscribedEvent
+  | StreamUnsubscribedEvent
+  | StreamListEvent
+  | StreamErrorEvent;

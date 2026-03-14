@@ -10,6 +10,8 @@ import { join } from 'node:path';
 export interface AmuxConfig {
   /** Path to the Unix socket. Default: /tmp/amux.sock */
   socketPath: string;
+  /** Port for the WebSocket streaming server. Default: 7777 */
+  streamPort: number;
   /** Directory for session recordings. Default: ~/.amux/recordings */
   recordingsDir: string;
   /** Auto-delete recordings older than this many days. 0 = never. Default: 30 */
@@ -26,6 +28,7 @@ const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 function getDefaults(): AmuxConfig {
   return {
     socketPath: '/tmp/amux.sock',
+    streamPort: 7777,
     recordingsDir: join(homedir(), '.amux', 'recordings'),
     retentionDays: 30,
     defaultShell: process.env['SHELL'] || '/bin/sh',

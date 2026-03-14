@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import net from "node:net";
 import process from "node:process";
+import { loadConfig } from "./amux/config.js";
 import { SessionManager } from "./core.js";
+import { AmuxStreamServer, DEFAULT_STREAM_PORT, getStreamPort } from "./stream.js";
 import { ApiRequest, ApiResponse } from "./types.js";
 
 export const DEFAULT_SOCKET_PATH = "/tmp/amux.sock";
 
 export function getSocketPath(): string {
-  return process.env.AMUX_SOCKET ?? DEFAULT_SOCKET_PATH;
+  return process.env.AMUX_SOCKET ?? loadConfig().socketPath ?? DEFAULT_SOCKET_PATH;
 }
 
 function success<T>(data: T): ApiResponse<T> {
@@ -20,9 +22,13 @@ function failure(message: string): ApiResponse {
 
 export class AmuxServer {
   private server: net.Server | null = null;
+  private streamServer: AmuxStreamServer | null = null;
   private readonly manager = SessionManager.getInstance();
 
-  public async start(socketPath = getSocketPath()): Promise<void> {
+  public async start(
+    socketPath = getSocketPath(),
+    streamPort = getStreamPortFromConfig(),
+  ): Promise<void> {
     await fs.promises.rm(socketPath, { force: true });
 
     this.server = net.createServer((socket) => {
@@ -56,10 +62,26 @@ export class AmuxServer {
       });
     });
 
-    await new Promise<void>((resolve, reject) => {
-      this.server?.once("error", reject);
-      this.server?.listen(socketPath, () => resolve());
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.server?.once("error", reject);
+        this.server?.listen(socketPath, () => resolve());
+      });
+
+      this.streamServer = new AmuxStreamServer();
+      await this.streamServer.start(streamPort);
+    } catch (error) {
+      if (this.server) {
+        await new Promise<void>((resolve) => {
+          this.server?.close(() => resolve());
+        });
+      }
+
+      this.server = null;
+      this.streamServer = null;
+      await fs.promises.rm(socketPath, { force: true });
+      throw error;
+    }
   }
 
   public async stop(socketPath = getSocketPath()): Promise<void> {
@@ -67,11 +89,14 @@ export class AmuxServer {
       return;
     }
 
+    await this.streamServer?.stop();
+
     await new Promise<void>((resolve, reject) => {
       this.server?.close((error) => (error ? reject(error) : resolve()));
     });
     await fs.promises.rm(socketPath, { force: true });
     this.server = null;
+    this.streamServer = null;
   }
 
   private handle(request: ApiRequest): ApiResponse {
@@ -147,8 +172,20 @@ export class AmuxServer {
   }
 }
 
-export async function startServer(socketPath = getSocketPath()): Promise<AmuxServer> {
+export function getStreamPortFromConfig(): number {
+  const envPort = process.env.AMUX_STREAM_PORT;
+  if (envPort) {
+    return getStreamPort();
+  }
+
+  return loadConfig().streamPort ?? DEFAULT_STREAM_PORT;
+}
+
+export async function startServer(
+  socketPath = getSocketPath(),
+  streamPort = getStreamPortFromConfig(),
+): Promise<AmuxServer> {
   const server = new AmuxServer();
-  await server.start(socketPath);
+  await server.start(socketPath, streamPort);
   return server;
 }
