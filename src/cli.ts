@@ -9,18 +9,25 @@ import { attachTui } from "./tui/app.js";
 import { ApiRequest, ApiResponse, SessionSnapshot, StreamMessage } from "./types.js";
 
 function printUsage(): void {
-  console.error(
+  console.log(
     [
+      "amux — Agent-Native Terminal Multiplexer\n",
       "Usage:",
-      "  amux",
-      "  amux start",
-      "  amux attach -t <session>",
-      "  amux spawn -s <name> -e <command> [--cwd dir] [--on-exit url] [--input text]",
-      "  amux list",
-      "  amux tail <session> [--lines N] [--strip-ansi]",
-      "  amux stream <session> [--pane N]",
-      "  amux write <session> <data>",
-      "  amux kill <session>",
+      "  amux                                          Launch TUI (auto-start daemon)",
+      "  amux start                                    Start daemon in foreground",
+      "  amux stop                                     Stop the daemon",
+      "  amux restart                                  Restart the daemon",
+      "  amux attach -t <session>                      Attach TUI to session",
+      "  amux spawn -s <name> -e <cmd> [options]       Create session & run command",
+      "      --cwd <dir>                               Working directory",
+      "      --on-exit <url>                            Webhook on process exit",
+      "      --input <text>                             Send input after spawn",
+      "  amux list                                     List all sessions",
+      "  amux tail <session> [--lines N] [--strip-ansi] Get pane output",
+      "  amux stream <session> [--pane N]              Live stream pane output",
+      "  amux write <session> <data>                   Send input to session",
+      "  amux kill <session>                           Kill a session",
+      "  amux help                                     Show this help",
     ].join("\n"),
   );
 }
@@ -150,12 +157,69 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "help" || command === "--help" || command === "-h") {
+    printUsage();
+    return;
+  }
+
   if (command === "start") {
     const socketPath = getSocketPath();
     const streamPort = getStreamPortFromConfig();
     await startServer(socketPath, streamPort);
     process.stdout.write(`amux listening on ${socketPath} and ws://127.0.0.1:${streamPort}\n`);
     return await new Promise(() => undefined);
+  }
+
+  if (command === "stop") {
+    const socketPath = getSocketPath();
+    try {
+      await send({ cmd: "list" }); // check if running
+      const fs = await import("node:fs");
+      // Find and kill the daemon process
+      const { execSync } = await import("node:child_process");
+      try {
+        execSync(`fuser -k ${socketPath} 2>/dev/null`, { stdio: "ignore" });
+      } catch { /* ignore */ }
+      try { fs.unlinkSync(socketPath); } catch { /* ignore */ }
+      console.log("amux stopped");
+    } catch {
+      console.log("amux is not running");
+    }
+    return;
+  }
+
+  if (command === "restart") {
+    const socketPath = getSocketPath();
+    // Stop
+    try {
+      const { execSync } = await import("node:child_process");
+      try {
+        execSync(`fuser -k ${socketPath} 2>/dev/null`, { stdio: "ignore" });
+      } catch { /* ignore */ }
+      const fs = await import("node:fs");
+      try { fs.unlinkSync(socketPath); } catch { /* ignore */ }
+      await new Promise((r) => setTimeout(r, 1000));
+    } catch { /* wasn't running */ }
+    // Start as detached daemon
+    const cliPath = process.argv[1];
+    const child = spawn(process.execPath, [cliPath, "start"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    // Wait for ready
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 5000) {
+      try {
+        await send({ cmd: "list" });
+        console.log("amux restarted");
+        return;
+      } catch {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+    console.error("amux restart failed — daemon did not come up");
+    process.exit(1);
   }
 
   if (command === "attach") {
