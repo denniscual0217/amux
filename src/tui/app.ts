@@ -197,16 +197,24 @@ export class TuiApp {
     this.paneListeners.clear();
   }
 
+  private renderPending = false;
+
   private render(): void {
-    this.writeFrame(
-      this.renderer.render({
-        session: this.currentSnapshot(),
-        paneBuffers: this.paneBuffers,
-        copyMode: this.copyMode,
-        overlay: this.overlay,
-        message: this.prompt ? `${this.prompt.kind}: ${this.prompt.value}` : this.message,
-      }),
-    );
+    if (this.renderPending) return;
+    this.renderPending = true;
+    // Batch renders within the same tick to avoid flicker
+    setImmediate(() => {
+      this.renderPending = false;
+      this.writeFrame(
+        this.renderer.render({
+          session: this.currentSnapshot(),
+          paneBuffers: this.paneBuffers,
+          copyMode: this.copyMode,
+          overlay: this.overlay,
+          message: this.prompt ? `${this.prompt.kind}: ${this.prompt.value}` : this.message,
+        }),
+      );
+    });
   }
 
   private syncPaneSizes(): void {

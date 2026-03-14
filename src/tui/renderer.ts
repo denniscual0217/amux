@@ -138,7 +138,7 @@ export class TerminalRenderer {
     const window = currentWindow(state.session);
     const statusRow = Math.max(1, this.height);
     const regions = this.getRegions(state.session);
-    const screen: string[] = ["\u001B[0m\u001B[2J"];
+    const screen: string[] = ["\u001B[?25l\u001B[0m\u001B[H"];
 
     for (const region of regions) {
       const isActive = region.paneId === window.activePaneId;
