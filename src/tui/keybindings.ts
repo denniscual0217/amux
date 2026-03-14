@@ -87,6 +87,18 @@ export class KeyBindingHandler extends EventEmitter {
       case "p":
         this.emit("action", { type: "previous-window" } satisfies TuiAction);
         return;
+      case "h":
+        this.emit("action", { type: "move-focus", direction: "left" } satisfies TuiAction);
+        return;
+      case "j":
+        this.emit("action", { type: "move-focus", direction: "down" } satisfies TuiAction);
+        return;
+      case "k":
+        this.emit("action", { type: "move-focus", direction: "up" } satisfies TuiAction);
+        return;
+      case "l":
+        this.emit("action", { type: "move-focus", direction: "right" } satisfies TuiAction);
+        return;
       case '"':
         this.emit("action", { type: "split", direction: "horizontal" } satisfies TuiAction);
         return;

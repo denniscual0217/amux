@@ -98,7 +98,7 @@ export class TuiApp {
   public start(size: { cols: number; rows: number }): void {
     this.renderer.resize(size.cols, size.rows);
     this.refreshSessionState();
-    this.normalizeWindowPanes();
+    this.normalizeWindowPanes(true);
     this.seedBuffers();
     this.bindCurrentWindow();
 
@@ -211,7 +211,7 @@ export class TuiApp {
       };
       const onExit = (event: PaneExitEvent): void => {
         this.message = `pane ${pane.id} exited (${event.code ?? "null"})`;
-        void this.refreshWindowState();
+        void this.handlePaneExit();
       };
       pane.on("data", onData);
       pane.on("exit", onExit);
@@ -268,14 +268,14 @@ export class TuiApp {
 
   private async refreshWindowState(): Promise<void> {
     this.refreshSessionState();
-    this.normalizeWindowPanes();
+    this.normalizeWindowPanes(true);
     this.seedBuffers();
     this.bindCurrentWindow();
     this.syncPaneSizes();
     this.render();
   }
 
-  private normalizeWindowPanes(): void {
+  private normalizeWindowPanes(reviveIfAllExited: boolean): void {
     const window = this.currentWindow();
     const panes = window.listPanes();
 
@@ -292,9 +292,42 @@ export class TuiApp {
       window.destroyPane(pane.id);
     }
 
-    window.createSessionBoundPane(this.sessionName, {
-      command: `exec ${getDefaultShell()}`,
-    });
+    if (reviveIfAllExited) {
+      window.createSessionBoundPane(this.sessionName, {
+        command: `exec ${getDefaultShell()}`,
+      });
+    }
+  }
+
+  private async handlePaneExit(): Promise<void> {
+    const sessionName = this.sessionName;
+    const session = this.currentSession();
+    const window = this.currentWindow();
+    const panes = window.listPanes();
+
+    if (panes.some((pane) => pane.running)) {
+      this.normalizeWindowPanes(false);
+      this.seedBuffers();
+      this.bindCurrentWindow();
+      this.syncPaneSizes();
+      this.render();
+      return;
+    }
+
+    this.manager.destroySession(sessionName);
+    const remaining = this.manager.listSessions();
+    if (remaining.length === 0) {
+      this.stop();
+      return;
+    }
+
+    const next =
+      remaining.find((candidate) =>
+        candidate.windows.some((candidateWindow) => candidateWindow.panes.some((pane) => pane.running)),
+      ) ?? remaining[0];
+
+    this.sessionName = next.name;
+    await this.refreshWindowState();
   }
 
   private async handleAction(action: TuiAction): Promise<void> {
