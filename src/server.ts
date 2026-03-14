@@ -254,6 +254,19 @@ export class AmuxServer {
         const zoomedPaneId = window.toggleZoom();
         return success({ session: session.snapshot(), window: window.snapshot(), zoomedPaneId });
       }
+      case "resize-window": {
+        const session = this.manager.getSession(request.session);
+        const window = session.getWindow(request.window);
+        window.resizePanes(
+          new Map(
+            request.panes.map((pane) => [
+              pane.pane,
+              { x: 0, y: 0, width: pane.cols + 2, height: pane.rows + 2 },
+            ]),
+          ),
+        );
+        return success({ session: session.snapshot(), window: window.snapshot() });
+      }
       case "grep":
         return success(grepPane(request.session, request.pattern, {
           pane: request.pane,

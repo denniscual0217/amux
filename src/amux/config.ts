@@ -20,6 +20,8 @@ export interface AmuxConfig {
   defaultShell: string;
   /** Default environment variables merged into every pane. */
   defaultEnv: Record<string, string>;
+  /** Prefix key for TUI bindings. Default: C-b */
+  prefixKey: string;
 }
 
 const CONFIG_DIR = join(homedir(), '.amux');
@@ -33,6 +35,7 @@ function getDefaults(): AmuxConfig {
     retentionDays: 30,
     defaultShell: process.env['SHELL'] || '/bin/sh',
     defaultEnv: {},
+    prefixKey: "C-b",
   };
 }
 

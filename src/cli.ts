@@ -1,27 +1,26 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import net from "node:net";
 import process from "node:process";
 import { WebSocket } from "ws";
+import { getDefaultShell } from "./core.js";
 import { getSocketPath, getStreamPortFromConfig, startServer } from "./server.js";
-import { ApiRequest, ApiResponse, StreamMessage } from "./types.js";
+import { attachTui } from "./tui/app.js";
+import { ApiRequest, ApiResponse, SessionSnapshot, StreamMessage } from "./types.js";
 
 function printUsage(): void {
   console.error(
     [
       "Usage:",
+      "  amux",
       "  amux start",
-      "  amux spawn -s <name> -e <command> [--cwd dir] [--on-exit url] [--input text] [--tag key=val]",
-      "  amux list [--tag key=val] [--include-dead]",
+      "  amux attach -t <session>",
+      "  amux spawn -s <name> -e <command> [--cwd dir] [--on-exit url] [--input text]",
+      "  amux list",
       "  amux tail <session> [--lines N] [--strip-ansi]",
       "  amux stream <session> [--pane N]",
       "  amux write <session> <data>",
       "  amux kill <session>",
-      "  amux grep <session> <pattern> [--pane N] [--last-lines N] [--context N]",
-      "  amux diff <session> [--pane N] [--client-id ID]",
-      "  amux clean",
-      "  amux template save <name> --session <session>",
-      "  amux template apply <name>",
-      "  amux template list",
     ].join("\n"),
   );
 }
@@ -51,9 +50,9 @@ function takeFlag(args: string[], name: string): boolean {
   return true;
 }
 
-async function send(request: ApiRequest): Promise<ApiResponse> {
+async function send<T = unknown>(request: ApiRequest): Promise<T> {
   const socketPath = getSocketPath();
-  return await new Promise<ApiResponse>((resolve, reject) => {
+  return await new Promise<T>((resolve, reject) => {
     const client = net.createConnection(socketPath);
     let buffer = "";
 
@@ -71,30 +70,75 @@ async function send(request: ApiRequest): Promise<ApiResponse> {
 
       const raw = buffer.slice(0, index);
       client.end();
-      resolve(JSON.parse(raw) as ApiResponse);
+      const response = JSON.parse(raw) as ApiResponse<T>;
+      if (!response.ok) {
+        reject(new Error(response.error));
+        return;
+      }
+      resolve(response.data);
     });
   });
 }
 
-function formatOutput(response: ApiResponse): void {
-  if (!response.ok) {
-    console.error(response.error);
-    process.exitCode = 1;
+async function ensureServerRunning(): Promise<void> {
+  try {
+    await send({ cmd: "list" });
     return;
+  } catch {
+    // Start a detached daemon and wait until it is ready.
   }
 
-  const payload = response.data;
+  const cliPath = process.argv[1];
+  const child = spawn(process.execPath, [cliPath, "start"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 5000) {
+    try {
+      await send({ cmd: "list" });
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  throw new Error(`amux server did not start on ${getSocketPath()}`);
+}
+
+function formatOutput(response: unknown): void {
   if (
-    payload &&
-    typeof payload === "object" &&
-    "lines" in payload &&
-    Array.isArray((payload as { lines: unknown[] }).lines)
+    response &&
+    typeof response === "object" &&
+    "lines" in response &&
+    Array.isArray((response as { lines: unknown[] }).lines)
   ) {
-    process.stdout.write(`${(payload as { lines: string[] }).lines.join("\n")}\n`);
+    process.stdout.write(`${(response as { lines: string[] }).lines.join("\n")}\n`);
     return;
   }
 
-  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
+}
+
+async function handleDefaultAttach(): Promise<void> {
+  await ensureServerRunning();
+  const sessions = await send<SessionSnapshot[]>({ cmd: "list" });
+
+  if (sessions.length === 0) {
+    const created = await send<{ session: SessionSnapshot }>({
+      cmd: "create-session",
+      session: "main",
+      window: "main",
+      exec: `exec ${getDefaultShell()}`,
+    });
+    await attachTui(created.session.name);
+    return;
+  }
+
+  const initial = sessions[0];
+  await attachTui(initial.name, { showSessionPicker: true });
 }
 
 async function main(): Promise<void> {
@@ -102,8 +146,7 @@ async function main(): Promise<void> {
   const command = args.shift();
 
   if (!command) {
-    printUsage();
-    process.exitCode = 1;
+    await handleDefaultAttach();
     return;
   }
 
@@ -113,6 +156,17 @@ async function main(): Promise<void> {
     await startServer(socketPath, streamPort);
     process.stdout.write(`amux listening on ${socketPath} and ws://127.0.0.1:${streamPort}\n`);
     return await new Promise(() => undefined);
+  }
+
+  if (command === "attach") {
+    await ensureServerRunning();
+    const session = takeOption(args, ["-t", "--target"]);
+    if (!session) {
+      throw new Error("attach requires -t <session>");
+    }
+    await send({ cmd: "get-session", session });
+    await attachTui(session);
+    return;
   }
 
   if (command === "stream") {
@@ -130,7 +184,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  let request: ApiRequest;
+  await ensureServerRunning();
+
+  let response: unknown;
 
   switch (command) {
     case "spawn": {
@@ -139,34 +195,17 @@ async function main(): Promise<void> {
       const cwd = takeOption(args, ["--cwd"]);
       const onExit = takeOption(args, ["--on-exit"]);
       const input = takeOption(args, ["--input"]);
-      const tagStr = takeOption(args, ["--tag"]);
 
       if (!session || !exec) {
         throw new Error("spawn requires -s <name> and -e <command>");
       }
 
-      let tags: Record<string, string> | undefined;
-      if (tagStr) {
-        tags = {};
-        for (const pair of tagStr.split(",")) {
-          const [k, v] = pair.split("=");
-          if (k) tags[k] = v ?? "";
-        }
-      }
-
-      request = { cmd: "spawn", session, exec, cwd, onExit, input, tags };
+      response = await send({ cmd: "spawn", session, exec, cwd, onExit, input });
       break;
     }
-    case "list": {
-      const tagFilter = takeOption(args, ["--tag"]);
-      const includeDead = takeFlag(args, "--include-dead");
-      request = {
-        cmd: "list",
-        filter: tagFilter ? { tag: tagFilter } : undefined,
-        includeDead,
-      };
+    case "list":
+      response = await send({ cmd: "list" });
       break;
-    }
     case "tail": {
       const session = args.shift();
       if (!session) {
@@ -175,12 +214,12 @@ async function main(): Promise<void> {
 
       const linesValue = takeOption(args, ["--lines"]);
       const stripAnsi = takeFlag(args, "--strip-ansi");
-      request = {
+      response = await send({
         cmd: "tail",
         session,
         lines: linesValue ? Number.parseInt(linesValue, 10) : undefined,
         stripAnsi,
-      };
+      });
       break;
     }
     case "write": {
@@ -190,7 +229,7 @@ async function main(): Promise<void> {
         throw new Error("write requires <session> <data>");
       }
 
-      request = { cmd: "write", session, data };
+      response = await send({ cmd: "write", session, data });
       break;
     }
     case "kill": {
@@ -199,73 +238,14 @@ async function main(): Promise<void> {
         throw new Error("kill requires <session>");
       }
 
-      request = { cmd: "kill", session };
-      break;
-    }
-    case "grep": {
-      const session = args.shift();
-      const pattern = args.shift();
-      if (!session || !pattern) {
-        throw new Error("grep requires <session> <pattern>");
-      }
-      const paneValue = takeOption(args, ["--pane"]);
-      const lastLinesValue = takeOption(args, ["--last-lines"]);
-      const contextValue = takeOption(args, ["--context"]);
-      request = {
-        cmd: "grep",
-        session,
-        pattern,
-        pane: paneValue ? Number.parseInt(paneValue, 10) : undefined,
-        lastLines: lastLinesValue ? Number.parseInt(lastLinesValue, 10) : undefined,
-        context: contextValue ? Number.parseInt(contextValue, 10) : undefined,
-      };
-      break;
-    }
-    case "diff": {
-      const session = args.shift();
-      if (!session) {
-        throw new Error("diff requires <session>");
-      }
-      const paneValue = takeOption(args, ["--pane"]);
-      const clientId = takeOption(args, ["--client-id"]);
-      request = {
-        cmd: "diff",
-        session,
-        pane: paneValue ? Number.parseInt(paneValue, 10) : undefined,
-        clientId: clientId ?? undefined,
-      };
-      break;
-    }
-    case "clean":
-      request = { cmd: "clean" };
-      break;
-    case "template": {
-      const subCommand = args.shift();
-      if (subCommand === "save") {
-        const name = args.shift();
-        const session = takeOption(args, ["--session", "-s"]);
-        if (!name || !session) {
-          throw new Error("template save requires <name> --session <session>");
-        }
-        request = { cmd: "template-save", name, session };
-      } else if (subCommand === "apply") {
-        const name = args.shift();
-        if (!name) {
-          throw new Error("template apply requires <name>");
-        }
-        request = { cmd: "template-apply", name };
-      } else if (subCommand === "list") {
-        request = { cmd: "template-list" };
-      } else {
-        throw new Error("template requires: save, apply, or list");
-      }
+      response = await send({ cmd: "kill", session });
       break;
     }
     default:
+      printUsage();
       throw new Error(`Unknown command: ${command}`);
   }
 
-  const response = await send(request);
   formatOutput(response);
 }
 

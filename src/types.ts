@@ -191,6 +191,17 @@ export interface ToggleZoomRequest {
   window?: string;
 }
 
+export interface ResizeWindowRequest {
+  cmd: "resize-window";
+  session: string;
+  window?: string;
+  panes: Array<{
+    pane: number;
+    cols: number;
+    rows: number;
+  }>;
+}
+
 export interface GrepRequest {
   cmd: "grep";
   session: string;
@@ -247,6 +258,7 @@ export type ApiRequest =
   | MovePaneFocusRequest
   | KillPaneRequest
   | ToggleZoomRequest
+  | ResizeWindowRequest
   | GrepRequest
   | DiffRequest
   | CleanRequest
