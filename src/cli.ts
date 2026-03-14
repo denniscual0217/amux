@@ -5,7 +5,6 @@ import process from "node:process";
 import { WebSocket } from "ws";
 import { getDefaultShell } from "./core.js";
 import { getSocketPath, getStreamPortFromConfig, startServer } from "./server.js";
-import { attachTui } from "./tui/app.js";
 import { ApiRequest, ApiResponse, SessionSnapshot, StreamMessage } from "./types.js";
 
 function printUsage(): void {
@@ -141,12 +140,12 @@ async function handleDefaultAttach(): Promise<void> {
       window: "main",
       exec: `exec ${getDefaultShell()}`,
     });
-    await attachTui(created.session.name);
+    await attachSession(created.session.name);
     return;
   }
 
   const initial = sessions[0];
-  await attachTui(initial.name, { showSessionPicker: true });
+  await attachSession(initial.name, { showSessionPicker: true });
 }
 
 async function main(): Promise<void> {
@@ -255,7 +254,7 @@ async function main(): Promise<void> {
       throw new Error("attach requires -t <session>");
     }
     await send({ cmd: "get-session", session });
-    await attachTui(session);
+    await attachSession(session);
     return;
   }
 
@@ -375,6 +374,112 @@ async function streamSession(session: string, pane: number): Promise<void> {
 
     socket.once("close", () => resolve());
     socket.once("error", reject);
+  });
+}
+
+async function attachSession(
+  session: string,
+  options: { showSessionPicker?: boolean } = {},
+): Promise<void> {
+  const socketPath = getSocketPath();
+  await new Promise<void>((resolve, reject) => {
+    const client = net.createConnection(socketPath);
+    let buffer = "";
+    let settled = false;
+
+    const cleanup = (): void => {
+      process.stdin.off("data", onInput);
+      process.stdout.off("resize", onResize);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+      process.stdin.pause();
+    };
+
+    const finish = (error?: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+
+    const sendMessage = (message: Record<string, unknown>): void => {
+      client.write(`${JSON.stringify(message)}\n`);
+    };
+
+    const onInput = (chunk: Buffer | string): void => {
+      const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+      sendMessage({ cmd: "attach-input", data: data.toString("base64") });
+    };
+
+    const onResize = (): void => {
+      sendMessage({
+        cmd: "attach-resize",
+        cols: process.stdout.columns || 80,
+        rows: process.stdout.rows || 24,
+      });
+    };
+
+    const onSignal = (): void => {
+      sendMessage({ cmd: "attach-detach" });
+    };
+
+    client.setEncoding("utf8");
+    client.once("error", finish);
+    client.once("connect", () => {
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(true);
+      }
+      process.stdin.resume();
+      process.stdin.on("data", onInput);
+      process.stdout.on("resize", onResize);
+      process.once("SIGINT", onSignal);
+      process.once("SIGTERM", onSignal);
+      sendMessage({
+        cmd: "attach-tui",
+        session,
+        showSessionPicker: options.showSessionPicker,
+        cols: process.stdout.columns || 80,
+        rows: process.stdout.rows || 24,
+      });
+    });
+    client.on("data", (chunk) => {
+      buffer += chunk;
+      while (buffer.includes("\n")) {
+        const index = buffer.indexOf("\n");
+        const raw = buffer.slice(0, index).trim();
+        buffer = buffer.slice(index + 1);
+        if (!raw) {
+          continue;
+        }
+
+        const message = JSON.parse(raw) as
+          | { event: "frame"; data: string }
+          | { event: "exit" }
+          | { event: "error"; message: string };
+        if (message.event === "frame") {
+          process.stdout.write(Buffer.from(message.data, "base64").toString("utf8"));
+          continue;
+        }
+        if (message.event === "error") {
+          finish(new Error(message.message));
+          client.end();
+          return;
+        }
+        finish();
+        client.end();
+        return;
+      }
+    });
+    client.once("close", () => finish());
   });
 }
 

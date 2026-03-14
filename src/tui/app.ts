@@ -1,9 +1,14 @@
-import net from "node:net";
 import process from "node:process";
-import { WebSocket } from "ws";
 import { loadConfig } from "../amux/config.js";
-import type { ApiRequest, ApiResponse, SessionSnapshot, StreamMessage } from "../types.js";
-import { getSocketPath, getStreamPortFromConfig } from "../server.js";
+import {
+  SessionManager,
+  getDefaultShell,
+  type Pane,
+  type Session,
+  type Window,
+} from "../core.js";
+import type { PaneExitEvent, PaneDataEvent } from "../core.js";
+import type { SessionSnapshot } from "../types.js";
 import { CopyModeState } from "./copypaste.js";
 import { KeyBindingHandler, type TuiAction } from "./keybindings.js";
 import { type OverlayState, type PaneBuffer, TerminalRenderer } from "./renderer.js";
@@ -13,37 +18,13 @@ interface PromptState {
   value: string;
 }
 
-function apiSend<T = unknown>(request: ApiRequest): Promise<T> {
-  const socketPath = getSocketPath();
-  return new Promise<T>((resolve, reject) => {
-    const client = net.createConnection(socketPath);
-    let buffer = "";
-
-    client.setEncoding("utf8");
-    client.once("error", reject);
-    client.once("connect", () => {
-      client.write(`${JSON.stringify(request)}\n`);
-    });
-    client.on("data", (chunk) => {
-      buffer += chunk;
-      const index = buffer.indexOf("\n");
-      if (index === -1) {
-        return;
-      }
-
-      const response = JSON.parse(buffer.slice(0, index)) as ApiResponse<T>;
-      client.end();
-      if (!response.ok) {
-        reject(new Error(response.error));
-        return;
-      }
-      resolve(response.data);
-    });
-  });
+interface TuiAppOptions {
+  showSessionPicker?: boolean;
+  writeFrame?: (frame: string) => void;
 }
 
-function createPaneBuffer(): PaneBuffer {
-  return { lines: [] };
+function createPaneBuffer(lines: string[] = []): PaneBuffer {
+  return { lines: lines.length > 0 ? lines : [""] };
 }
 
 function appendChunk(buffer: PaneBuffer, chunk: string): void {
@@ -60,29 +41,15 @@ function appendChunk(buffer: PaneBuffer, chunk: string): void {
 }
 
 export class TuiApp {
-  private session!: SessionSnapshot;
+  private readonly manager = SessionManager.getInstance();
   private readonly paneBuffers = new Map<number, PaneBuffer>();
   private readonly copyMode = new CopyModeState();
   private readonly keybindings = new KeyBindingHandler({ prefix: loadConfig().prefixKey });
-  private readonly renderer = new TerminalRenderer((regions) => {
-    const window = this.currentWindow();
-    if (!window) {
-      return;
-    }
-
-    void apiSend({
-      cmd: "resize-window",
-      session: this.session.name,
-      window: window.name,
-      panes: regions.map((region) => ({
-        pane: region.paneId,
-        cols: Math.max(1, region.width - 2),
-        rows: Math.max(1, region.height - 2),
-      })),
-    }).catch(() => undefined);
-  });
-  private readonly stream = new WebSocket(`ws://127.0.0.1:${getStreamPortFromConfig()}`);
-  private readonly subscribedPanes = new Set<number>();
+  private readonly renderer = new TerminalRenderer();
+  private readonly paneListeners = new Map<
+    number,
+    { pane: Pane; onData: (event: PaneDataEvent) => void; onExit: (event: PaneExitEvent) => void }
+  >();
   private active = true;
   private overlay: OverlayState | null = null;
   private prompt: PromptState | null = null;
@@ -92,37 +59,29 @@ export class TuiApp {
 
   public constructor(
     private sessionName: string,
-    private readonly options: { showSessionPicker?: boolean } = {},
+    private readonly options: TuiAppOptions = {},
   ) {}
 
-  public async start(): Promise<void> {
-    this.session = await apiSend<SessionSnapshot>({ cmd: "get-session", session: this.sessionName });
-    await this.seedBuffers();
-    await new Promise<void>((resolve, reject) => {
-      this.stream.once("open", () => resolve());
-      this.stream.once("error", reject);
-    });
-    this.subscribeCurrentWindow();
+  public start(size: { cols: number; rows: number }): void {
+    this.renderer.resize(size.cols, size.rows);
+    this.refreshSessionState();
+    this.seedBuffers();
+    this.bindCurrentWindow();
 
     this.keybindings.on("action", (action: TuiAction) => {
       void this.handleAction(action);
     });
 
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", this.onInput);
-    this.stream.on("message", this.onMessage);
-    this.renderer.enterAlternateScreen();
+    this.writeFrame(this.renderer.enterAlternateScreen());
     this.clock = setInterval(() => this.render(), 1000);
     if (this.options.showSessionPicker) {
-      const sessions = await apiSend<SessionSnapshot[]>({ cmd: "list" });
+      const sessions = this.manager.listSessions();
       this.overlay = {
         title: "Sessions",
         items: sessions.map((candidate) => candidate.name),
         selectedIndex: Math.max(
           0,
-          sessions.findIndex((candidate) => candidate.name === this.session.name),
+          sessions.findIndex((candidate) => candidate.name === this.sessionName),
         ),
       };
     }
@@ -130,18 +89,18 @@ export class TuiApp {
     this.syncPaneSizes();
   }
 
-  public async stop(): Promise<void> {
+  public stop(): void {
+    if (!this.active) {
+      return;
+    }
+
     this.active = false;
-    process.stdin.off("data", this.onInput);
-    process.stdin.setRawMode(false);
-    process.stdin.pause();
-    this.stream.off("message", this.onMessage);
-    this.stream.close();
+    this.unbindPanes();
     if (this.clock) {
       clearInterval(this.clock);
       this.clock = null;
     }
-    this.renderer.leaveAlternateScreen();
+    this.writeFrame(this.renderer.leaveAlternateScreen());
     this.stopResolve?.();
     this.stopResolve = null;
   }
@@ -156,7 +115,11 @@ export class TuiApp {
     });
   }
 
-  private readonly onInput = (chunk: string): void => {
+  public handleInput(chunk: string): void {
+    if (!this.active) {
+      return;
+    }
+
     if (this.prompt) {
       this.handlePromptInput(chunk);
       return;
@@ -168,98 +131,103 @@ export class TuiApp {
     }
 
     this.keybindings.feed(chunk, this.copyMode.active);
-  };
+  }
 
-  private readonly onMessage = (chunk: Buffer): void => {
-    const message = JSON.parse(chunk.toString("utf8")) as StreamMessage;
-    if (message.event === "output") {
-      const buffer = this.paneBuffers.get(message.pane) ?? createPaneBuffer();
-      appendChunk(buffer, message.data);
-      this.paneBuffers.set(message.pane, buffer);
-      this.render();
-      return;
-    }
+  public handleResize(cols: number, rows: number): void {
+    this.renderer.resize(cols, rows);
+    this.syncPaneSizes();
+    this.render();
+  }
 
-    if (message.event === "exit") {
-      this.message = `pane ${message.pane} exited (${message.code ?? "null"})`;
-      this.render();
-    }
-  };
+  private writeFrame(frame: string): void {
+    (this.options.writeFrame ?? ((value: string) => process.stdout.write(value)))(frame);
+  }
 
-  private async seedBuffers(): Promise<void> {
+  private currentSession(): Session {
+    return this.manager.getSession(this.sessionName);
+  }
+
+  private currentWindow(): Window {
+    return this.currentSession().getWindow();
+  }
+
+  private currentSnapshot(): SessionSnapshot {
+    return this.currentSession().snapshot();
+  }
+
+  private refreshSessionState(): void {
+    this.sessionName = this.currentSession().name;
+  }
+
+  private seedBuffers(): void {
     const window = this.currentWindow();
-    if (!window) {
-      return;
-    }
     this.paneBuffers.clear();
-    for (const pane of window.panes) {
-      const data = await apiSend<{ lines: string[] }>({
-        cmd: "tail",
-        session: this.sessionName,
-        window: window.name,
-        pane: pane.id,
-        lines: 2000,
-      });
-      this.paneBuffers.set(pane.id, { lines: data.lines.length > 0 ? data.lines : [""] });
+    for (const pane of window.listPanes()) {
+      this.paneBuffers.set(pane.id, createPaneBuffer(pane.lines));
     }
   }
 
-  private subscribeCurrentWindow(): void {
+  private bindCurrentWindow(): void {
+    this.unbindPanes();
     const window = this.currentWindow();
-    if (!window) {
-      return;
-    }
-
-    for (const paneId of this.subscribedPanes) {
-      this.stream.send(JSON.stringify({ cmd: "unsubscribe", session: this.session.name, pane: paneId }));
-    }
-    this.subscribedPanes.clear();
-
-    for (const pane of window.panes) {
-      this.stream.send(JSON.stringify({ cmd: "subscribe", session: this.session.name, pane: pane.id }));
-      this.subscribedPanes.add(pane.id);
+    for (const pane of window.listPanes()) {
+      const onData = (event: PaneDataEvent): void => {
+        const buffer = this.paneBuffers.get(pane.id) ?? createPaneBuffer();
+        appendChunk(buffer, event.chunk);
+        this.paneBuffers.set(pane.id, buffer);
+        this.render();
+      };
+      const onExit = (event: PaneExitEvent): void => {
+        this.message = `pane ${pane.id} exited (${event.code ?? "null"})`;
+        this.paneBuffers.set(pane.id, createPaneBuffer(pane.lines));
+        this.render();
+      };
+      pane.on("data", onData);
+      pane.on("exit", onExit);
+      this.paneListeners.set(pane.id, { pane, onData, onExit });
+      this.paneBuffers.set(pane.id, createPaneBuffer(pane.lines));
     }
   }
 
-  private currentWindow() {
-    return this.session.windows.find((window) => window.id === this.session.activeWindowId) ?? this.session.windows[0];
+  private unbindPanes(): void {
+    for (const listener of this.paneListeners.values()) {
+      listener.pane.off("data", listener.onData);
+      listener.pane.off("exit", listener.onExit);
+    }
+    this.paneListeners.clear();
   }
 
   private render(): void {
-    this.renderer.render({
-      session: this.session,
-      paneBuffers: this.paneBuffers,
-      copyMode: this.copyMode,
-      overlay: this.overlay,
-      message: this.prompt ? `${this.prompt.kind}: ${this.prompt.value}` : this.message,
-    });
-  }
-
-  private async refreshSession(): Promise<void> {
-    this.session = await apiSend<SessionSnapshot>({ cmd: "get-session", session: this.sessionName });
-    this.sessionName = this.session.name;
-    await this.seedBuffers();
-    this.render();
-    this.syncPaneSizes();
+    this.writeFrame(
+      this.renderer.render({
+        session: this.currentSnapshot(),
+        paneBuffers: this.paneBuffers,
+        copyMode: this.copyMode,
+        overlay: this.overlay,
+        message: this.prompt ? `${this.prompt.kind}: ${this.prompt.value}` : this.message,
+      }),
+    );
   }
 
   private syncPaneSizes(): void {
     const window = this.currentWindow();
-    if (!window) {
-      return;
-    }
+    const regions = this.renderer.getRegions(this.currentSnapshot());
+    window.resizePanes(
+      new Map(
+        regions.map((region) => [
+          region.paneId,
+          { x: 0, y: 0, width: region.width, height: region.height },
+        ]),
+      ),
+    );
+  }
 
-    const regions = this.renderer.getRegions(this.session);
-    void apiSend({
-      cmd: "resize-window",
-      session: this.session.name,
-      window: window.name,
-      panes: regions.map((region) => ({
-        pane: region.paneId,
-        cols: Math.max(1, region.width - 2),
-        rows: Math.max(1, region.height - 2),
-      })),
-    }).catch(() => undefined);
+  private async refreshWindowState(): Promise<void> {
+    this.refreshSessionState();
+    this.seedBuffers();
+    this.bindCurrentWindow();
+    this.syncPaneSizes();
+    this.render();
   }
 
   private async handleAction(action: TuiAction): Promise<void> {
@@ -267,119 +235,97 @@ export class TuiApp {
       return;
     }
 
+    const session = this.currentSession();
     const window = this.currentWindow();
     switch (action.type) {
       case "detach":
-        await this.stop();
+        this.stop();
         return;
       case "literal-input":
         if (this.copyMode.active) {
           this.handleCopyInput(action.data);
         } else {
-          await apiSend({
-            cmd: "write",
-            session: this.session.name,
-            window: window.name,
-            pane: window.activePaneId ?? undefined,
-            data: action.data,
-          });
+          const pane = window.activePane ?? window.listPanes()[0] ?? null;
+          pane?.pty.write(action.data);
         }
         return;
       case "new-window":
-        await apiSend({
-          cmd: "create-window",
-          session: this.session.name,
-          exec: `exec ${process.env.SHELL ?? "/bin/sh"}`,
+        this.manager.createWindow(this.sessionName, {
+          command: `exec ${getDefaultShell()}`,
         });
-        await this.refreshSession();
-        this.subscribeCurrentWindow();
+        await this.refreshWindowState();
         return;
       case "next-window":
       case "previous-window": {
-        const windows = this.session.windows;
-        const currentIndex = windows.findIndex((candidate) => candidate.id === this.session.activeWindowId);
+        const windows = session.listWindows();
+        const currentIndex = windows.findIndex((candidate) => candidate.id === session.snapshot().activeWindowId);
         const delta = action.type === "next-window" ? 1 : -1;
         const nextIndex = (currentIndex + delta + windows.length) % windows.length;
-        await apiSend({
-          cmd: "select-window",
-          session: this.session.name,
-          id: windows[nextIndex]?.id,
-        });
-        await this.refreshSession();
-        this.subscribeCurrentWindow();
+        const nextWindow = windows[nextIndex];
+        if (nextWindow) {
+          session.selectWindow(nextWindow.id);
+          await this.refreshWindowState();
+        }
         return;
       }
       case "select-window":
-        await apiSend({
-          cmd: "select-window",
-          session: this.session.name,
-          id: action.index,
-        });
-        await this.refreshSession();
-        this.subscribeCurrentWindow();
+        session.selectWindow(action.index);
+        await this.refreshWindowState();
         return;
       case "split":
-        await apiSend({
-          cmd: "split",
-          session: this.session.name,
-          window: window.name,
-          direction: action.direction,
-          exec: `exec ${process.env.SHELL ?? "/bin/sh"}`,
+        this.manager.splitPane(this.sessionName, action.direction, {
+          command: `exec ${getDefaultShell()}`,
+          windowName: window.name,
         });
-        await this.refreshSession();
-        this.subscribeCurrentWindow();
+        await this.refreshWindowState();
         return;
       case "move-focus":
-        await apiSend({
-          cmd: "move-pane-focus",
-          session: this.session.name,
-          window: window.name,
-          direction: action.direction,
-        });
-        await this.refreshSession();
+        window.moveFocus(action.direction);
+        this.render();
         return;
       case "kill-pane":
         this.prompt = { kind: "confirm-kill-pane", value: "" };
         this.render();
         return;
       case "toggle-zoom":
-        await apiSend({ cmd: "toggle-zoom", session: this.session.name, window: window.name });
-        await this.refreshSession();
+        window.toggleZoom();
+        this.syncPaneSizes();
+        this.render();
         return;
       case "rename-window":
         this.prompt = { kind: "rename-window", value: window.name };
         this.render();
         return;
       case "rename-session":
-        this.prompt = { kind: "rename-session", value: this.session.name };
+        this.prompt = { kind: "rename-session", value: this.sessionName };
         this.render();
         return;
       case "window-picker":
         this.overlay = {
           title: "Windows",
-          items: this.session.windows.map((candidate) => `${candidate.id}: ${candidate.name}`),
+          items: session.listWindows().map((candidate) => `${candidate.id}: ${candidate.name}`),
           selectedIndex: Math.max(
             0,
-            this.session.windows.findIndex((candidate) => candidate.id === this.session.activeWindowId),
+            session.listWindows().findIndex((candidate) => candidate.id === session.snapshot().activeWindowId),
           ),
         };
         this.render();
         return;
       case "session-picker": {
-        const sessions = await apiSend<SessionSnapshot[]>({ cmd: "list" });
+        const sessions = this.manager.listSessions();
         this.overlay = {
           title: "Sessions",
           items: sessions.map((candidate) => candidate.name),
           selectedIndex: Math.max(
             0,
-            sessions.findIndex((candidate) => candidate.name === this.session.name),
+            sessions.findIndex((candidate) => candidate.name === this.sessionName),
           ),
         };
         this.render();
         return;
       }
       case "copy-mode": {
-        const activePaneId = window.activePaneId ?? window.panes[0]?.id ?? 0;
+        const activePaneId = window.activePaneIdValue ?? window.listPanes()[0]?.id ?? 0;
         this.copyMode.enter(this.paneBuffers.get(activePaneId)?.lines ?? []);
         this.render();
         return;
@@ -392,7 +338,7 @@ export class TuiApp {
   }
 
   private handleCopyInput(chunk: string): void {
-    const lines = this.paneBuffers.get(this.currentWindow().activePaneId ?? 0)?.lines ?? [];
+    const lines = this.paneBuffers.get(this.currentWindow().activePaneIdValue ?? 0)?.lines ?? [];
     switch (chunk) {
       case "\u001b[A":
         this.copyMode.move(lines, -1, 0);
@@ -459,33 +405,29 @@ export class TuiApp {
 
     const prompt = this.prompt;
     this.prompt = null;
+    const session = this.currentSession();
     const window = this.currentWindow();
 
     if (prompt.kind === "confirm-kill-pane") {
       if (prompt.value.toLowerCase() === "y") {
-        await apiSend({ cmd: "kill-pane", session: this.session.name, window: window.name });
-        await this.refreshSession();
+        window.destroyPane();
+        await this.refreshWindowState();
+      } else {
+        this.render();
       }
       return;
     }
 
     if (prompt.kind === "rename-window") {
-      await apiSend({
-        cmd: "rename-window",
-        session: this.session.name,
-        window: window.name,
-        name: prompt.value.trim() || window.name,
-      });
-      await this.refreshSession();
+      session.renameWindow(window.name, prompt.value.trim() || window.name);
+      await this.refreshWindowState();
       return;
     }
 
-    await apiSend({
-      cmd: "rename-session",
-      session: this.session.name,
-      name: prompt.value.trim() || this.session.name,
-    });
-    await this.refreshSession();
+    const nextName = prompt.value.trim() || this.sessionName;
+    this.manager.renameSession(this.sessionName, nextName);
+    this.sessionName = nextName;
+    await this.refreshWindowState();
   }
 
   private async handleOverlayInput(chunk: string): Promise<void> {
@@ -516,20 +458,17 @@ export class TuiApp {
     }
 
     if (this.overlay.title === "Windows") {
-      const selected = this.session.windows[this.overlay.selectedIndex];
+      const selected = this.currentSession().listWindows()[this.overlay.selectedIndex];
       if (selected) {
-        await apiSend({ cmd: "select-window", session: this.session.name, id: selected.id });
-        await this.refreshSession();
-        this.subscribeCurrentWindow();
+        this.currentSession().selectWindow(selected.id);
+        await this.refreshWindowState();
       }
     } else {
-      const sessions = await apiSend<SessionSnapshot[]>({ cmd: "list" });
+      const sessions = this.manager.listSessions();
       const selected = sessions[this.overlay.selectedIndex];
       if (selected) {
-        this.session = selected;
         this.sessionName = selected.name;
-        await this.refreshSession();
-        this.subscribeCurrentWindow();
+        await this.refreshWindowState();
       }
     }
 
@@ -543,8 +482,32 @@ export async function attachTui(
   options: { showSessionPicker?: boolean } = {},
 ): Promise<void> {
   const app = new TuiApp(sessionName, options);
-  await app.start();
-  process.once("SIGINT", () => void app.stop());
-  process.once("SIGTERM", () => void app.stop());
+  app.start({
+    cols: process.stdout.columns || 80,
+    rows: process.stdout.rows || 24,
+  });
+
+  const onInput = (chunk: Buffer | string): void => {
+    app.handleInput(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  };
+  const onResize = (): void => {
+    app.handleResize(process.stdout.columns || 80, process.stdout.rows || 24);
+  };
+  const onSignal = (): void => {
+    app.stop();
+  };
+
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.on("data", onInput);
+  process.stdout.on("resize", onResize);
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
   await app.waitUntilStopped();
+
+  process.stdin.off("data", onInput);
+  process.stdout.off("resize", onResize);
+  process.stdin.setRawMode(false);
+  process.stdin.pause();
 }

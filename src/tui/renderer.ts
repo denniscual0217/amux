@@ -1,4 +1,3 @@
-import process from "node:process";
 import type { CopyModeState } from "./copypaste.js";
 import { buildStatusBar } from "./statusbar.js";
 import type { PaneLayoutSnapshot, SessionSnapshot, WindowSnapshot } from "../types.js";
@@ -92,28 +91,22 @@ function currentWindow(session: SessionSnapshot): WindowSnapshot {
 }
 
 export class TerminalRenderer {
-  private width = process.stdout.columns || 80;
-  private height = process.stdout.rows || 24;
-  private resizeHandler = () => {
-    this.width = process.stdout.columns || 80;
-    this.height = process.stdout.rows || 24;
-    this.onResize?.(this.getRegions(this.lastState?.session));
-    if (this.lastState) {
-      this.render(this.lastState);
-    }
-  };
+  private width = 80;
+  private height = 24;
   private lastState: RenderState | null = null;
 
-  public constructor(private readonly onResize?: (regions: PaneRegion[]) => void) {}
-
-  public enterAlternateScreen(): void {
-    process.stdout.write("\u001B[?1049h\u001B[?25l");
-    process.stdout.on("resize", this.resizeHandler);
+  public enterAlternateScreen(): string {
+    return "\u001B[?1049h\u001B[?25l";
   }
 
-  public leaveAlternateScreen(): void {
-    process.stdout.off("resize", this.resizeHandler);
-    process.stdout.write("\u001B[0m\u001B[2J\u001B[H\u001B[?25h\u001B[?1049l");
+  public leaveAlternateScreen(): string {
+    return "\u001B[0m\u001B[2J\u001B[H\u001B[?25h\u001B[?1049l";
+  }
+
+  public resize(width: number, height: number): PaneRegion[] {
+    this.width = Math.max(1, width);
+    this.height = Math.max(2, height);
+    return this.getRegions(this.lastState?.session);
   }
 
   public getRegions(session?: SessionSnapshot | null): PaneRegion[] {
@@ -139,10 +132,8 @@ export class TerminalRenderer {
     return regions;
   }
 
-  public render(state: RenderState): void {
+  public render(state: RenderState): string {
     this.lastState = state;
-    this.width = process.stdout.columns || 80;
-    this.height = process.stdout.rows || 24;
 
     const window = currentWindow(state.session);
     const statusRow = Math.max(1, this.height);
@@ -157,7 +148,9 @@ export class TerminalRenderer {
       const buffer = state.paneBuffers.get(region.paneId) ?? { lines: [] };
       const lines = buffer.lines;
       const copyLines =
-        state.copyMode.active && isActive ? lines.slice(0, Math.max(0, lines.length - state.copyMode.scrollOffset)) : lines;
+        state.copyMode.active && isActive
+          ? lines.slice(0, Math.max(0, lines.length - state.copyMode.scrollOffset))
+          : lines;
       const visibleLines = copyLines.slice(-innerHeight);
 
       for (let column = 0; column < region.width; column += 1) {
@@ -178,7 +171,9 @@ export class TerminalRenderer {
       }
 
       const title = ` ${window.name}.${region.paneId} `;
-      screen.push(`${move(region.y, region.x + 2)}${borderColor}${trimVisible(title, innerWidth - 1)}\u001B[0m`);
+      screen.push(
+        `${move(region.y, region.x + 2)}${borderColor}${trimVisible(title, innerWidth - 1)}\u001B[0m`,
+      );
 
       visibleLines.forEach((line, index) => {
         const outputRow = region.y + 1 + index;
@@ -207,7 +202,10 @@ export class TerminalRenderer {
             const sourceLine = copyLines[lineIndex] ?? "";
             const startColumn = lineIndex === selection.start.line ? selection.start.column : 0;
             const endColumn = lineIndex === selection.end.line ? selection.end.column : sourceLine.length;
-            const text = trimVisible(sourceLine.slice(startColumn, endColumn), Math.max(0, endColumn - startColumn));
+            const text = trimVisible(
+              sourceLine.slice(startColumn, endColumn),
+              Math.max(0, endColumn - startColumn),
+            );
             screen.push(
               `${move(region.y + 1 + visibleIndex, region.x + 1 + startColumn)}\u001B[7m${text}\u001B[0m`,
             );
@@ -220,27 +218,39 @@ export class TerminalRenderer {
     }
 
     if (state.overlay) {
-      const boxWidth = Math.min(this.width - 4, Math.max(24, Math.max(...state.overlay.items.map((item) => item.length), state.overlay.title.length) + 4));
+      const boxWidth = Math.min(
+        this.width - 4,
+        Math.max(
+          24,
+          Math.max(...state.overlay.items.map((item) => item.length), state.overlay.title.length) + 4,
+        ),
+      );
       const boxHeight = Math.min(this.height - 4, state.overlay.items.length + 4);
       const boxX = Math.max(2, Math.floor((this.width - boxWidth) / 2));
       const boxY = Math.max(2, Math.floor((this.height - boxHeight) / 2));
       screen.push(`${move(boxY, boxX)}+${"-".repeat(boxWidth - 2)}+`);
-      screen.push(`${move(boxY + 1, boxX)}|${trimVisible(` ${state.overlay.title}`, boxWidth - 2)}|`);
+      screen.push(
+        `${move(boxY + 1, boxX)}|${trimVisible(` ${state.overlay.title}`, boxWidth - 2)}|`,
+      );
       for (let index = 0; index < boxHeight - 3; index += 1) {
         const item = state.overlay.items[index] ?? "";
         const active = index === state.overlay.selectedIndex;
-        const body = active ? `\u001B[7m${trimVisible(item, boxWidth - 2)}\u001B[0m` : trimVisible(item, boxWidth - 2);
+        const body = active
+          ? `\u001B[7m${trimVisible(item, boxWidth - 2)}\u001B[0m`
+          : trimVisible(item, boxWidth - 2);
         screen.push(`${move(boxY + 2 + index, boxX)}|${body}|`);
       }
       screen.push(`${move(boxY + boxHeight - 1, boxX)}+${"-".repeat(boxWidth - 2)}+`);
     }
 
     if (state.message) {
-      screen.push(`${move(Math.max(1, statusRow - 1), 1)}\u001B[48;5;238m${trimVisible(state.message, this.width)}\u001B[0m`);
+      screen.push(
+        `${move(Math.max(1, statusRow - 1), 1)}\u001B[48;5;238m${trimVisible(state.message, this.width)}\u001B[0m`,
+      );
     }
 
     screen.push(`${move(statusRow, 1)}${buildStatusBar(state.session, this.width)}`);
     screen.push(move(1, 1));
-    process.stdout.write(screen.join(""));
+    return screen.join("");
   }
 }

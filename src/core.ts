@@ -353,6 +353,14 @@ export class Pane extends EventEmitter {
     return this.terminal.pid;
   }
 
+  public get pty(): pty.IPty {
+    return this.terminal;
+  }
+
+  public get lines(): string[] {
+    return this.getAllLines(false);
+  }
+
   public get running(): boolean {
     return this.exitCodeValue === null;
   }

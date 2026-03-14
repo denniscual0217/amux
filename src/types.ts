@@ -239,6 +239,29 @@ export interface TemplateSaveRequest {
   session: string;
 }
 
+export interface AttachTuiRequest {
+  cmd: "attach-tui";
+  session: string;
+  cols: number;
+  rows: number;
+  showSessionPicker?: boolean;
+}
+
+export interface AttachInputRequest {
+  cmd: "attach-input";
+  data: string;
+}
+
+export interface AttachResizeRequest {
+  cmd: "attach-resize";
+  cols: number;
+  rows: number;
+}
+
+export interface AttachDetachRequest {
+  cmd: "attach-detach";
+}
+
 export type ApiRequest =
   | SpawnRequest
   | CreateSessionRequest
@@ -265,6 +288,12 @@ export type ApiRequest =
   | TemplateApplyRequest
   | TemplateListRequest
   | TemplateSaveRequest;
+
+export type AttachMessage =
+  | AttachTuiRequest
+  | AttachInputRequest
+  | AttachResizeRequest
+  | AttachDetachRequest;
 
 export interface ApiSuccess<T = unknown> {
   ok: true;

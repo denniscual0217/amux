@@ -4,7 +4,8 @@ import process from "node:process";
 import { loadConfig } from "./amux/config.js";
 import { SessionManager, getDefaultShell } from "./core.js";
 import { AmuxStreamServer, DEFAULT_STREAM_PORT, getStreamPort } from "./stream.js";
-import { ApiRequest, ApiResponse } from "./types.js";
+import { TuiApp } from "./tui/app.js";
+import { ApiRequest, ApiResponse, type AttachMessage } from "./types.js";
 import { grepPane } from "./search.js";
 import { diffPane, generateClientId } from "./diff.js";
 
@@ -34,6 +35,7 @@ export class AmuxServer {
   private streamServer: AmuxStreamServer | null = null;
   private readonly manager = SessionManager.getInstance();
   private readonly clientIds = new WeakMap<net.Socket, string>();
+  private readonly attachedTuis = new Map<net.Socket, TuiApp>();
 
   public async start(
     socketPath = getSocketPath(),
@@ -46,6 +48,9 @@ export class AmuxServer {
       let buffer = "";
 
       socket.setEncoding("utf8");
+      socket.on("close", () => {
+        this.attachedTuis.delete(socket);
+      });
       socket.on("data", (chunk) => {
         buffer += chunk;
 
@@ -61,7 +66,11 @@ export class AmuxServer {
           let response: ApiResponse;
 
           try {
-            const request = JSON.parse(raw) as ApiRequest;
+            const request = JSON.parse(raw) as ApiRequest | AttachMessage;
+            if (this.isAttachMessage(request)) {
+              this.handleAttach(request, socket);
+              continue;
+            }
             response = this.handle(request, socket);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -93,6 +102,64 @@ export class AmuxServer {
       this.streamServer = null;
       await fs.promises.rm(socketPath, { force: true });
       throw error;
+    }
+  }
+
+  private isAttachMessage(request: ApiRequest | AttachMessage): request is AttachMessage {
+    return (
+      request.cmd === "attach-tui" ||
+      request.cmd === "attach-input" ||
+      request.cmd === "attach-resize" ||
+      request.cmd === "attach-detach"
+    );
+  }
+
+  private handleAttach(request: AttachMessage, socket: net.Socket): void {
+    switch (request.cmd) {
+      case "attach-tui": {
+        try {
+          const existing = this.attachedTuis.get(socket);
+          existing?.stop();
+          const app = new TuiApp(request.session, {
+            showSessionPicker: request.showSessionPicker,
+            writeFrame: (frame) => {
+              if (socket.destroyed) {
+                return;
+              }
+              socket.write(
+                `${JSON.stringify({ event: "frame", data: Buffer.from(frame, "utf8").toString("base64") })}\n`,
+              );
+            },
+          });
+          this.attachedTuis.set(socket, app);
+          app.start({ cols: request.cols, rows: request.rows });
+          void app.waitUntilStopped().then(() => {
+            if (this.attachedTuis.get(socket) === app) {
+              this.attachedTuis.delete(socket);
+            }
+            if (!socket.destroyed) {
+              socket.end(`${JSON.stringify({ event: "exit" })}\n`);
+            }
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!socket.destroyed) {
+            socket.end(`${JSON.stringify({ event: "error", message })}\n`);
+          }
+        }
+        return;
+      }
+      case "attach-input":
+        this.attachedTuis
+          .get(socket)
+          ?.handleInput(Buffer.from(request.data, "base64").toString("utf8"));
+        return;
+      case "attach-resize":
+        this.attachedTuis.get(socket)?.handleResize(request.cols, request.rows);
+        return;
+      case "attach-detach":
+        this.attachedTuis.get(socket)?.stop();
+        return;
     }
   }
 
