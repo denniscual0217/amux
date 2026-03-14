@@ -3,6 +3,8 @@ import { loadConfig } from "../amux/config.js";
 import {
   SessionManager,
   getDefaultShell,
+  stripAnsi,
+  type PaneScreenSnapshot,
   type Pane,
   type Session,
   type Window,
@@ -27,22 +29,54 @@ function createPaneBuffer(lines: string[] = []): PaneBuffer {
   return { lines: lines.length > 0 ? lines : [""] };
 }
 
-function appendChunk(buffer: PaneBuffer, chunk: string): void {
-  const normalized = chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const segments = normalized.split("\n");
+function appendDisplayText(buffer: PaneBuffer, text: string): void {
   if (buffer.lines.length === 0) {
     buffer.lines.push("");
   }
 
-  buffer.lines[buffer.lines.length - 1] += segments[0] ?? "";
-  for (const segment of segments.slice(1)) {
-    buffer.lines.push(segment);
+  for (const char of text) {
+    if (char === "\n") {
+      buffer.lines.push("");
+      continue;
+    }
+
+    if (char === "\r") {
+      buffer.lines[buffer.lines.length - 1] = "";
+      continue;
+    }
+
+    if (char === "\b") {
+      buffer.lines[buffer.lines.length - 1] = buffer.lines[buffer.lines.length - 1].slice(0, -1);
+      continue;
+    }
+
+    if (char < " " && char !== "\t") {
+      continue;
+    }
+
+    buffer.lines[buffer.lines.length - 1] += char;
   }
+}
+
+function appendChunk(buffer: PaneBuffer, chunk: string): void {
+  appendDisplayText(buffer, stripAnsi(chunk).replace(/\u0007/g, ""));
+}
+
+function displayLines(lines: string[]): string[] {
+  const buffer = createPaneBuffer();
+  for (const line of lines) {
+    appendDisplayText(buffer, `${stripAnsi(line).replace(/\u0007/g, "")}\n`);
+  }
+  while (buffer.lines.length > 1 && buffer.lines[buffer.lines.length - 1] === "") {
+    buffer.lines.pop();
+  }
+  return buffer.lines;
 }
 
 export class TuiApp {
   private readonly manager = SessionManager.getInstance();
   private readonly paneBuffers = new Map<number, PaneBuffer>();
+  private readonly paneScreens = new Map<number, PaneScreenSnapshot>();
   private readonly copyMode = new CopyModeState();
   private readonly keybindings = new KeyBindingHandler({ prefix: loadConfig().prefixKey });
   private readonly renderer = new TerminalRenderer();
@@ -55,7 +89,6 @@ export class TuiApp {
   private prompt: PromptState | null = null;
   private message: string | null = null;
   private stopResolve: (() => void) | null = null;
-  private clock: NodeJS.Timeout | null = null;
 
   public constructor(
     private sessionName: string,
@@ -65,6 +98,7 @@ export class TuiApp {
   public start(size: { cols: number; rows: number }): void {
     this.renderer.resize(size.cols, size.rows);
     this.refreshSessionState();
+    this.normalizeWindowPanes();
     this.seedBuffers();
     this.bindCurrentWindow();
 
@@ -73,7 +107,6 @@ export class TuiApp {
     });
 
     this.writeFrame(this.renderer.enterAlternateScreen());
-    this.clock = setInterval(() => this.render(), 1000);
     if (this.options.showSessionPicker) {
       const sessions = this.manager.listSessions();
       this.overlay = {
@@ -96,10 +129,6 @@ export class TuiApp {
 
     this.active = false;
     this.unbindPanes();
-    if (this.clock) {
-      clearInterval(this.clock);
-      this.clock = null;
-    }
     this.writeFrame(this.renderer.leaveAlternateScreen());
     this.stopResolve?.();
     this.stopResolve = null;
@@ -162,8 +191,10 @@ export class TuiApp {
   private seedBuffers(): void {
     const window = this.currentWindow();
     this.paneBuffers.clear();
+    this.paneScreens.clear();
     for (const pane of window.listPanes()) {
-      this.paneBuffers.set(pane.id, createPaneBuffer(pane.lines));
+      this.paneBuffers.set(pane.id, createPaneBuffer(displayLines(pane.lines)));
+      this.paneScreens.set(pane.id, pane.getScreenSnapshot());
     }
   }
 
@@ -175,17 +206,18 @@ export class TuiApp {
         const buffer = this.paneBuffers.get(pane.id) ?? createPaneBuffer();
         appendChunk(buffer, event.chunk);
         this.paneBuffers.set(pane.id, buffer);
+        this.paneScreens.set(pane.id, pane.getScreenSnapshot());
         this.render();
       };
       const onExit = (event: PaneExitEvent): void => {
         this.message = `pane ${pane.id} exited (${event.code ?? "null"})`;
-        this.paneBuffers.set(pane.id, createPaneBuffer(pane.lines));
-        this.render();
+        void this.refreshWindowState();
       };
       pane.on("data", onData);
       pane.on("exit", onExit);
       this.paneListeners.set(pane.id, { pane, onData, onExit });
-      this.paneBuffers.set(pane.id, createPaneBuffer(pane.lines));
+      this.paneBuffers.set(pane.id, createPaneBuffer(displayLines(pane.lines)));
+      this.paneScreens.set(pane.id, pane.getScreenSnapshot());
     }
   }
 
@@ -209,6 +241,7 @@ export class TuiApp {
         this.renderer.render({
           session: this.currentSnapshot(),
           paneBuffers: this.paneBuffers,
+          paneScreens: this.paneScreens,
           copyMode: this.copyMode,
           overlay: this.overlay,
           message: this.prompt ? `${this.prompt.kind}: ${this.prompt.value}` : this.message,
@@ -228,14 +261,40 @@ export class TuiApp {
         ]),
       ),
     );
+    for (const pane of window.listPanes()) {
+      this.paneScreens.set(pane.id, pane.getScreenSnapshot());
+    }
   }
 
   private async refreshWindowState(): Promise<void> {
     this.refreshSessionState();
+    this.normalizeWindowPanes();
     this.seedBuffers();
     this.bindCurrentWindow();
     this.syncPaneSizes();
     this.render();
+  }
+
+  private normalizeWindowPanes(): void {
+    const window = this.currentWindow();
+    const panes = window.listPanes();
+
+    if (panes.some((pane) => pane.running)) {
+      for (const pane of panes) {
+        if (!pane.running) {
+          window.destroyPane(pane.id);
+        }
+      }
+      return;
+    }
+
+    for (const pane of panes) {
+      window.destroyPane(pane.id);
+    }
+
+    window.createSessionBoundPane(this.sessionName, {
+      command: `exec ${getDefaultShell()}`,
+    });
   }
 
   private async handleAction(action: TuiAction): Promise<void> {

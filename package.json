@@ -29,6 +29,8 @@
   "license": "ISC",
   "dependencies": {
     "@types/node": "^25.5.0",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
     "typescript": "^5.9.3",
     "ws": "^8.19.0"

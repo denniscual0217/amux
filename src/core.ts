@@ -4,6 +4,7 @@ import os from "node:os";
 import process from "node:process";
 import { EventEmitter } from "node:events";
 import * as pty from "node-pty";
+import { Terminal as HeadlessTerminal, type IBufferCell } from "@xterm/headless";
 import { URL } from "node:url";
 import type {
   FocusDirection,
@@ -293,8 +294,157 @@ export interface PaneExitEvent {
   duration: string;
 }
 
+export interface PaneScreenCursor {
+  row: number;
+  col: number;
+}
+
+export interface PaneScreenSnapshot {
+  lines: string[];
+  cursor: PaneScreenCursor;
+  rows: number;
+  cols: number;
+}
+
+function isInteractiveShellCommand(command: string, shell: string): boolean {
+  const normalized = command.trim();
+  return normalized === shell || normalized === `exec ${shell}`;
+}
+
+interface CellStyle {
+  fgMode: number;
+  fgColor: number;
+  bgMode: number;
+  bgColor: number;
+  bold: boolean;
+  italic: boolean;
+  dim: boolean;
+  underline: boolean;
+  blink: boolean;
+  inverse: boolean;
+  invisible: boolean;
+  strikethrough: boolean;
+  overline: boolean;
+}
+
+function paletteColorCode(color: number, isBackground: boolean): string {
+  const base = isBackground ? 40 : 30;
+  const brightBase = isBackground ? 100 : 90;
+  if (color < 8) {
+    return String(base + color);
+  }
+  if (color < 16) {
+    return String(brightBase + (color - 8));
+  }
+  return `${isBackground ? "48" : "38"};5;${color}`;
+}
+
+function rgbColorCode(color: number, isBackground: boolean): string {
+  const red = (color >> 16) & 0xff;
+  const green = (color >> 8) & 0xff;
+  const blue = color & 0xff;
+  return `${isBackground ? "48" : "38"};2;${red};${green};${blue}`;
+}
+
+function styleEquals(left: CellStyle | null, right: CellStyle): boolean {
+  return !!left &&
+    left.fgMode === right.fgMode &&
+    left.fgColor === right.fgColor &&
+    left.bgMode === right.bgMode &&
+    left.bgColor === right.bgColor &&
+    left.bold === right.bold &&
+    left.italic === right.italic &&
+    left.dim === right.dim &&
+    left.underline === right.underline &&
+    left.blink === right.blink &&
+    left.inverse === right.inverse &&
+    left.invisible === right.invisible &&
+    left.strikethrough === right.strikethrough &&
+    left.overline === right.overline;
+}
+
+function sgrForStyle(style: CellStyle): string {
+  const codes = ["0"];
+
+  if (style.bold) codes.push("1");
+  if (style.dim) codes.push("2");
+  if (style.italic) codes.push("3");
+  if (style.underline) codes.push("4");
+  if (style.blink) codes.push("5");
+  if (style.inverse) codes.push("7");
+  if (style.invisible) codes.push("8");
+  if (style.strikethrough) codes.push("9");
+  if (style.overline) codes.push("53");
+
+  if (style.fgMode === 0) {
+    codes.push("39");
+  } else if (style.fgMode === 1) {
+    codes.push(paletteColorCode(style.fgColor, false));
+  } else if (style.fgMode === 2) {
+    codes.push(rgbColorCode(style.fgColor, false));
+  }
+
+  if (style.bgMode === 0) {
+    codes.push("49");
+  } else if (style.bgMode === 1) {
+    codes.push(paletteColorCode(style.bgColor, true));
+  } else if (style.bgMode === 2) {
+    codes.push(rgbColorCode(style.bgColor, true));
+  }
+
+  return `\u001B[${codes.join(";")}m`;
+}
+
+function cellStyle(cell: IBufferCell): CellStyle {
+  return {
+    fgMode: cell.isFgDefault() ? 0 : cell.isFgPalette() ? 1 : 2,
+    fgColor: cell.getFgColor(),
+    bgMode: cell.isBgDefault() ? 0 : cell.isBgPalette() ? 1 : 2,
+    bgColor: cell.getBgColor(),
+    bold: !!cell.isBold(),
+    italic: !!cell.isItalic(),
+    dim: !!cell.isDim(),
+    underline: !!cell.isUnderline(),
+    blink: !!cell.isBlink(),
+    inverse: !!cell.isInverse(),
+    invisible: !!cell.isInvisible(),
+    strikethrough: !!cell.isStrikethrough(),
+    overline: !!cell.isOverline(),
+  };
+}
+
+function renderTerminalLine(lineIndex: number, terminal: HeadlessTerminal): string {
+  const line = terminal.buffer.active.getLine(lineIndex);
+  if (!line) {
+    return " ".repeat(terminal.cols);
+  }
+
+  const scratch = terminal.buffer.active.getNullCell();
+  let rendered = "";
+  let activeStyle: CellStyle | null = null;
+
+  for (let col = 0; col < terminal.cols; col += 1) {
+    const cell = line.getCell(col, scratch);
+    if (!cell || cell.getWidth() === 0) {
+      continue;
+    }
+
+    const nextStyle = cellStyle(cell);
+    if (!styleEquals(activeStyle, nextStyle)) {
+      rendered += sgrForStyle(nextStyle);
+      activeStyle = nextStyle;
+    }
+
+    const chars = cell.getChars();
+    rendered += chars.length > 0 ? chars : " ";
+  }
+
+  return activeStyle ? `${rendered}\u001B[0m` : rendered;
+}
+
 export class Pane extends EventEmitter {
   private readonly terminal: pty.IPty;
+  private readonly screen: HeadlessTerminal;
   private readonly outputLines: string[] = [];
   private partialLine = "";
   private readonly startedAtDate = new Date();
@@ -320,7 +470,14 @@ export class Pane extends EventEmitter {
 
     const shell = options.shell ?? process.env.SHELL ?? "/bin/sh";
     const env = { ...process.env, ...options.env } as Record<string, string>;
-    this.terminal = pty.spawn(shell, ["-lc", command], {
+    const args = isInteractiveShellCommand(command, shell) ? [] : ["-lc", command];
+    this.screen = new HeadlessTerminal({
+      cols: options.cols ?? 120,
+      rows: options.rows ?? 30,
+      allowProposedApi: true,
+      scrollback: 1000,
+    });
+    this.terminal = pty.spawn(shell, args, {
       name: "xterm-color",
       cols: options.cols ?? 120,
       rows: options.rows ?? 30,
@@ -330,7 +487,9 @@ export class Pane extends EventEmitter {
 
     this.terminal.onData((chunk) => {
       this.capture(chunk);
-      this.emit("data", { chunk } satisfies PaneDataEvent);
+      this.screen.write(chunk, () => {
+        this.emit("data", { chunk } satisfies PaneDataEvent);
+      });
     });
 
     this.terminal.onExit(({ exitCode }) => {
@@ -392,6 +551,7 @@ export class Pane extends EventEmitter {
     }
 
     this.terminal.resize(Math.max(1, cols), Math.max(1, rows));
+    this.screen.resize(Math.max(1, cols), Math.max(1, rows));
   }
 
   public kill(signal?: string): void {
@@ -432,6 +592,26 @@ export class Pane extends EventEmitter {
       durationMs: this.durationMs,
       lineCount: this.outputLines.length + (this.partialLine.length > 0 ? 1 : 0),
       onExitUrl: this.onExitUrl,
+    };
+  }
+
+  public getScreenSnapshot(): PaneScreenSnapshot {
+    const buffer = this.screen.buffer.active;
+    const startLine = buffer.viewportY;
+    const lines: string[] = [];
+
+    for (let row = 0; row < this.screen.rows; row += 1) {
+      lines.push(renderTerminalLine(startLine + row, this.screen));
+    }
+
+    return {
+      lines,
+      cursor: {
+        row: Math.max(0, Math.min(this.screen.rows - 1, buffer.cursorY)),
+        col: Math.max(0, Math.min(this.screen.cols - 1, buffer.cursorX)),
+      },
+      rows: this.screen.rows,
+      cols: this.screen.cols,
     };
   }
 

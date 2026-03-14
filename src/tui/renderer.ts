@@ -1,6 +1,7 @@
 import type { CopyModeState } from "./copypaste.js";
 import { buildStatusBar } from "./statusbar.js";
 import type { PaneLayoutSnapshot, SessionSnapshot, WindowSnapshot } from "../types.js";
+import type { PaneScreenSnapshot } from "../core.js";
 
 export interface PaneBuffer {
   lines: string[];
@@ -23,6 +24,7 @@ export interface OverlayState {
 export interface RenderState {
   session: SessionSnapshot;
   paneBuffers: Map<number, PaneBuffer>;
+  paneScreens: Map<number, PaneScreenSnapshot>;
   copyMode: CopyModeState;
   overlay?: OverlayState | null;
   message?: string | null;
@@ -43,6 +45,14 @@ function trimVisible(value: string, width: number): string {
 
   const normalized = value.replace(/\t/g, "  ");
   return normalized.length > width ? normalized.slice(0, width) : normalized.padEnd(width, " ");
+}
+
+function stripAnsiForWidth(value: string): string {
+  return value.replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u001B\u009B][[\]()#;?]*(?:(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]|(?:].*?(?:\u0007|\u001B\\)))/g,
+    "",
+  );
 }
 
 function computeRegions(
@@ -146,6 +156,7 @@ export class TerminalRenderer {
       const innerWidth = Math.max(1, region.width - 2);
       const innerHeight = Math.max(1, region.height - 2);
       const buffer = state.paneBuffers.get(region.paneId) ?? { lines: [] };
+      const paneScreen = state.paneScreens.get(region.paneId);
       const lines = buffer.lines;
       const copyLines =
         state.copyMode.active && isActive
@@ -175,13 +186,24 @@ export class TerminalRenderer {
         `${move(region.y, region.x + 2)}${borderColor}${trimVisible(title, innerWidth - 1)}\u001B[0m`,
       );
 
-      visibleLines.forEach((line, index) => {
+      const normalLines =
+        paneScreen?.lines.slice(0, innerHeight).map((line) => {
+          const plain = stripAnsiForWidth(line);
+          if (plain.length >= innerWidth) {
+            return line;
+          }
+          return `${line}${" ".repeat(innerWidth - plain.length)}`;
+        }) ?? visibleLines.map((line) => trimVisible(line, innerWidth));
+
+      normalLines.forEach((line, index) => {
         const outputRow = region.y + 1 + index;
         if (outputRow >= region.y + region.height - 1) {
           return;
         }
 
-        screen.push(`${move(outputRow, region.x + 1)}${trimVisible(line, innerWidth)}`);
+        const content =
+          state.copyMode.active && isActive ? trimVisible(visibleLines[index] ?? "", innerWidth) : line;
+        screen.push(`${move(outputRow, region.x + 1)}${content}`);
       });
 
       if (state.copyMode.active && isActive) {
@@ -214,6 +236,10 @@ export class TerminalRenderer {
         screen.push(
           `${move(region.y + 1 + cursorLine, region.x + 1 + cursorColumn)}\u001B[7m${trimVisible(copyLines[state.copyMode.cursor.line]?.[state.copyMode.cursor.column] ?? " ", 1)}\u001B[0m`,
         );
+      } else if (isActive && paneScreen) {
+        const cursorRow = clamp(paneScreen.cursor.row, 0, innerHeight - 1);
+        const cursorColumn = clamp(paneScreen.cursor.col, 0, innerWidth - 1);
+        screen.push(`${move(region.y + 1 + cursorRow, region.x + 1 + cursorColumn)}\u001B[7m \u001B[0m`);
       }
     }
 
@@ -251,6 +277,6 @@ export class TerminalRenderer {
 
     screen.push(`${move(statusRow, 1)}${buildStatusBar(state.session, this.width)}`);
     screen.push(move(1, 1));
-    return screen.join("");
+    return `\u001B[?2026h${screen.join("")}\u001B[?2026l`;
   }
 }

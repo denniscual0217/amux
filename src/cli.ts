@@ -133,7 +133,17 @@ async function handleDefaultAttach(): Promise<void> {
   await ensureServerRunning();
   const sessions = await send<SessionSnapshot[]>({ cmd: "list" });
 
-  if (sessions.length === 0) {
+  const mainSession = sessions.find((session) => session.name === "main");
+  if (mainSession) {
+    const hasRunningPane = mainSession.windows.some((window) => window.panes.some((pane) => pane.running));
+    if (hasRunningPane) {
+      await attachSession(mainSession.name);
+      return;
+    }
+    await send({ cmd: "kill", session: mainSession.name });
+  }
+
+  if (sessions.length === 0 || (sessions.length === 1 && mainSession)) {
     const created = await send<{ session: SessionSnapshot }>({
       cmd: "create-session",
       session: "main",
@@ -144,8 +154,11 @@ async function handleDefaultAttach(): Promise<void> {
     return;
   }
 
-  const initial = sessions[0];
-  await attachSession(initial.name, { showSessionPicker: true });
+  const runningSession = sessions.find((session) =>
+    session.windows.some((window) => window.panes.some((pane) => pane.running)),
+  );
+  const initial = runningSession ?? sessions[0];
+  await attachSession(initial.name);
 }
 
 async function main(): Promise<void> {
