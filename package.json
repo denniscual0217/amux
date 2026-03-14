@@ -2,14 +2,16 @@
   "name": "amux",
   "version": "0.1.0",
   "description": "Agent-native terminal multiplexer — like tmux, but with a JSON API for AI agents",
-  "main": "dist/amux/server.js",
+  "main": "dist/server.js",
   "bin": {
-    "amux": "./dist/amux/cli.js"
+    "amux": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/amux/server.js",
-    "dev": "tsc --watch"
+    "start": "node dist/cli.js start",
+    "dev": "tsc --watch",
+    "smoke": "npm run build && node scripts/smoke-test.mjs",
+    "test": "npm run build"
   },
   "keywords": [
     "terminal",
