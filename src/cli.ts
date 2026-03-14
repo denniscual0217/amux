@@ -10,12 +10,18 @@ function printUsage(): void {
     [
       "Usage:",
       "  amux start",
-      "  amux spawn -s <name> -e <command> [--cwd dir] [--on-exit url] [--input text]",
-      "  amux list",
+      "  amux spawn -s <name> -e <command> [--cwd dir] [--on-exit url] [--input text] [--tag key=val]",
+      "  amux list [--tag key=val] [--include-dead]",
       "  amux tail <session> [--lines N] [--strip-ansi]",
       "  amux stream <session> [--pane N]",
       "  amux write <session> <data>",
       "  amux kill <session>",
+      "  amux grep <session> <pattern> [--pane N] [--last-lines N] [--context N]",
+      "  amux diff <session> [--pane N] [--client-id ID]",
+      "  amux clean",
+      "  amux template save <name> --session <session>",
+      "  amux template apply <name>",
+      "  amux template list",
     ].join("\n"),
   );
 }
@@ -133,17 +139,34 @@ async function main(): Promise<void> {
       const cwd = takeOption(args, ["--cwd"]);
       const onExit = takeOption(args, ["--on-exit"]);
       const input = takeOption(args, ["--input"]);
+      const tagStr = takeOption(args, ["--tag"]);
 
       if (!session || !exec) {
         throw new Error("spawn requires -s <name> and -e <command>");
       }
 
-      request = { cmd: "spawn", session, exec, cwd, onExit, input };
+      let tags: Record<string, string> | undefined;
+      if (tagStr) {
+        tags = {};
+        for (const pair of tagStr.split(",")) {
+          const [k, v] = pair.split("=");
+          if (k) tags[k] = v ?? "";
+        }
+      }
+
+      request = { cmd: "spawn", session, exec, cwd, onExit, input, tags };
       break;
     }
-    case "list":
-      request = { cmd: "list" };
+    case "list": {
+      const tagFilter = takeOption(args, ["--tag"]);
+      const includeDead = takeFlag(args, "--include-dead");
+      request = {
+        cmd: "list",
+        filter: tagFilter ? { tag: tagFilter } : undefined,
+        includeDead,
+      };
       break;
+    }
     case "tail": {
       const session = args.shift();
       if (!session) {
@@ -177,6 +200,65 @@ async function main(): Promise<void> {
       }
 
       request = { cmd: "kill", session };
+      break;
+    }
+    case "grep": {
+      const session = args.shift();
+      const pattern = args.shift();
+      if (!session || !pattern) {
+        throw new Error("grep requires <session> <pattern>");
+      }
+      const paneValue = takeOption(args, ["--pane"]);
+      const lastLinesValue = takeOption(args, ["--last-lines"]);
+      const contextValue = takeOption(args, ["--context"]);
+      request = {
+        cmd: "grep",
+        session,
+        pattern,
+        pane: paneValue ? Number.parseInt(paneValue, 10) : undefined,
+        lastLines: lastLinesValue ? Number.parseInt(lastLinesValue, 10) : undefined,
+        context: contextValue ? Number.parseInt(contextValue, 10) : undefined,
+      };
+      break;
+    }
+    case "diff": {
+      const session = args.shift();
+      if (!session) {
+        throw new Error("diff requires <session>");
+      }
+      const paneValue = takeOption(args, ["--pane"]);
+      const clientId = takeOption(args, ["--client-id"]);
+      request = {
+        cmd: "diff",
+        session,
+        pane: paneValue ? Number.parseInt(paneValue, 10) : undefined,
+        clientId: clientId ?? undefined,
+      };
+      break;
+    }
+    case "clean":
+      request = { cmd: "clean" };
+      break;
+    case "template": {
+      const subCommand = args.shift();
+      if (subCommand === "save") {
+        const name = args.shift();
+        const session = takeOption(args, ["--session", "-s"]);
+        if (!name || !session) {
+          throw new Error("template save requires <name> --session <session>");
+        }
+        request = { cmd: "template-save", name, session };
+      } else if (subCommand === "apply") {
+        const name = args.shift();
+        if (!name) {
+          throw new Error("template apply requires <name>");
+        }
+        request = { cmd: "template-apply", name };
+      } else if (subCommand === "list") {
+        request = { cmd: "template-list" };
+      } else {
+        throw new Error("template requires: save, apply, or list");
+      }
       break;
     }
     default:

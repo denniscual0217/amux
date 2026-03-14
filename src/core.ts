@@ -1,11 +1,13 @@
-import os from "node:os";
-import process from "node:process";
 import http from "node:http";
 import https from "node:https";
+import os from "node:os";
+import process from "node:process";
 import { EventEmitter } from "node:events";
-import { URL } from "node:url";
 import * as pty from "node-pty";
-import {
+import { URL } from "node:url";
+import type {
+  FocusDirection,
+  PaneLayoutSnapshot,
   PaneSnapshot,
   SessionSnapshot,
   SpawnOptions,
@@ -17,6 +19,27 @@ const ANSI_PATTERN =
   // Matches common CSI/OSC/control-sequence patterns well enough for agent output cleanup.
   // eslint-disable-next-line no-control-regex
   /[\u001B\u009B][[\]()#;?]*(?:(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]|(?:].*?(?:\u0007|\u001B\\)))/g;
+
+interface PaneLayoutLeaf {
+  type: "pane";
+  paneId: number;
+}
+
+interface PaneLayoutSplit {
+  type: "split";
+  direction: SplitDirection;
+  first: PaneLayoutNode;
+  second: PaneLayoutNode;
+}
+
+type PaneLayoutNode = PaneLayoutLeaf | PaneLayoutSplit;
+
+interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 export function stripAnsi(value: string): string {
   return value.replace(ANSI_PATTERN, "");
@@ -38,6 +61,197 @@ export function formatDuration(durationMs: number): string {
   parts.push(`${seconds}s`);
 
   return parts.join("");
+}
+
+function cloneLayout(node: PaneLayoutNode | null): PaneLayoutSnapshot | null {
+  if (!node) {
+    return null;
+  }
+
+  if (node.type === "pane") {
+    return { type: "pane", paneId: node.paneId };
+  }
+
+  return {
+    type: "split",
+    direction: node.direction,
+    first: cloneLayout(node.first) as PaneLayoutSnapshot,
+    second: cloneLayout(node.second) as PaneLayoutSnapshot,
+  };
+}
+
+function findLeaf(node: PaneLayoutNode | null, paneId: number): PaneLayoutLeaf | null {
+  if (!node) {
+    return null;
+  }
+
+  if (node.type === "pane") {
+    return node.paneId === paneId ? node : null;
+  }
+
+  return findLeaf(node.first, paneId) ?? findLeaf(node.second, paneId);
+}
+
+function replaceLeaf(
+  node: PaneLayoutNode | null,
+  paneId: number,
+  replacement: PaneLayoutNode,
+): PaneLayoutNode | null {
+  if (!node) {
+    return null;
+  }
+
+  if (node.type === "pane") {
+    return node.paneId === paneId ? replacement : node;
+  }
+
+  return {
+    type: "split",
+    direction: node.direction,
+    first: replaceLeaf(node.first, paneId, replacement) ?? node.first,
+    second: replaceLeaf(node.second, paneId, replacement) ?? node.second,
+  };
+}
+
+function removeLeaf(node: PaneLayoutNode | null, paneId: number): PaneLayoutNode | null {
+  if (!node) {
+    return null;
+  }
+
+  if (node.type === "pane") {
+    return node.paneId === paneId ? null : node;
+  }
+
+  const nextFirst = removeLeaf(node.first, paneId);
+  const nextSecond = removeLeaf(node.second, paneId);
+
+  if (!nextFirst && !nextSecond) {
+    return null;
+  }
+  if (!nextFirst) {
+    return nextSecond;
+  }
+  if (!nextSecond) {
+    return nextFirst;
+  }
+
+  return {
+    type: "split",
+    direction: node.direction,
+    first: nextFirst,
+    second: nextSecond,
+  };
+}
+
+function collectPaneIds(node: PaneLayoutNode | null): number[] {
+  if (!node) {
+    return [];
+  }
+
+  if (node.type === "pane") {
+    return [node.paneId];
+  }
+
+  return [...collectPaneIds(node.first), ...collectPaneIds(node.second)];
+}
+
+function computeRects(node: PaneLayoutNode | null, rect: Rect, output: Map<number, Rect>): void {
+  if (!node || rect.width <= 0 || rect.height <= 0) {
+    return;
+  }
+
+  if (node.type === "pane") {
+    output.set(node.paneId, rect);
+    return;
+  }
+
+  if (node.direction === "vertical") {
+    const firstWidth = Math.max(1, Math.floor(rect.width / 2));
+    const secondWidth = Math.max(1, rect.width - firstWidth);
+    computeRects(node.first, { ...rect, width: firstWidth }, output);
+    computeRects(
+      node.second,
+      { x: rect.x + firstWidth, y: rect.y, width: secondWidth, height: rect.height },
+      output,
+    );
+    return;
+  }
+
+  const firstHeight = Math.max(1, Math.floor(rect.height / 2));
+  const secondHeight = Math.max(1, rect.height - firstHeight);
+  computeRects(node.first, { ...rect, height: firstHeight }, output);
+  computeRects(
+    node.second,
+    { x: rect.x, y: rect.y + firstHeight, width: rect.width, height: secondHeight },
+    output,
+  );
+}
+
+function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return Math.min(aEnd, bEnd) - Math.max(aStart, bStart) > 0;
+}
+
+function findNeighbor(paneId: number, direction: FocusDirection, rects: Map<number, Rect>): number | null {
+  const current = rects.get(paneId);
+  if (!current) {
+    return null;
+  }
+
+  const currentCenterX = current.x + current.width / 2;
+  const currentCenterY = current.y + current.height / 2;
+  let candidate: { paneId: number; distance: number } | null = null;
+
+  for (const [otherPaneId, rect] of rects.entries()) {
+    if (otherPaneId === paneId) {
+      continue;
+    }
+
+    let matches = false;
+    let distance = Number.POSITIVE_INFINITY;
+
+    switch (direction) {
+      case "left":
+        matches =
+          rect.x + rect.width <= current.x &&
+          overlaps(rect.y, rect.y + rect.height, current.y, current.y + current.height);
+        distance = current.x - (rect.x + rect.width);
+        break;
+      case "right":
+        matches =
+          rect.x >= current.x + current.width &&
+          overlaps(rect.y, rect.y + rect.height, current.y, current.y + current.height);
+        distance = rect.x - (current.x + current.width);
+        break;
+      case "up":
+        matches =
+          rect.y + rect.height <= current.y &&
+          overlaps(rect.x, rect.x + rect.width, current.x, current.x + current.width);
+        distance = current.y - (rect.y + rect.height);
+        break;
+      case "down":
+        matches =
+          rect.y >= current.y + current.height &&
+          overlaps(rect.x, rect.x + rect.width, current.x, current.x + current.width);
+        distance = rect.y - (current.y + current.height);
+        break;
+    }
+
+    if (!matches) {
+      continue;
+    }
+
+    const tieBreaker =
+      direction === "left" || direction === "right"
+        ? Math.abs(currentCenterY - (rect.y + rect.height / 2))
+        : Math.abs(currentCenterX - (rect.x + rect.width / 2));
+    const score = distance * 1000 + tieBreaker;
+
+    if (!candidate || score < candidate.distance) {
+      candidate = { paneId: otherPaneId, distance: score };
+    }
+  }
+
+  return candidate?.paneId ?? null;
 }
 
 async function postExitCallback(
@@ -91,7 +305,6 @@ export class Pane extends EventEmitter {
   public readonly command: string;
   public readonly cwd?: string;
   public readonly onExitUrl?: string;
-  public readonly direction?: SplitDirection;
 
   public constructor(
     id: number,
@@ -104,7 +317,6 @@ export class Pane extends EventEmitter {
     this.command = command;
     this.cwd = options.cwd;
     this.onExitUrl = options.onExitUrl;
-    this.direction = undefined;
 
     const shell = options.shell ?? process.env.SHELL ?? "/bin/sh";
     const env = { ...process.env, ...options.env } as Record<string, string>;
@@ -154,8 +366,24 @@ export class Pane extends EventEmitter {
     return end.getTime() - this.startedAtDate.getTime();
   }
 
+  public get endedAt(): Date | null {
+    return this.endedAtDate;
+  }
+
+  public get startedAt(): Date {
+    return this.startedAtDate;
+  }
+
   public write(data: string): void {
     this.terminal.write(data);
+  }
+
+  public resize(cols: number, rows: number): void {
+    if (!this.running) {
+      return;
+    }
+
+    this.terminal.resize(Math.max(1, cols), Math.max(1, rows));
   }
 
   public kill(signal?: string): void {
@@ -171,6 +399,16 @@ export class Pane extends EventEmitter {
 
     const selected = visibleLines.slice(-Math.max(lines, 0));
     return shouldStripAnsi ? selected.map((line) => stripAnsi(line)) : selected;
+  }
+
+  public getAllLines(shouldStripAnsi = false): string[] {
+    const visibleLines = [...this.outputLines];
+
+    if (this.partialLine.length > 0) {
+      visibleLines.push(this.partialLine);
+    }
+
+    return shouldStripAnsi ? visibleLines.map((line) => stripAnsi(line)) : visibleLines;
   }
 
   public snapshot(): PaneSnapshot {
@@ -235,37 +473,86 @@ export class Pane extends EventEmitter {
 export class Window {
   private readonly panes = new Map<number, Pane>();
   private nextPaneId = 0;
+  private layout: PaneLayoutNode | null = null;
+  private activePaneId: number | null = null;
+  private zoomedPaneId: number | null = null;
+  private nameValue: string;
 
   public readonly id: number;
-  public readonly name: string;
 
   public constructor(id: number, name: string) {
     this.id = id;
-    this.name = name;
+    this.nameValue = name;
+  }
+
+  public get name(): string {
+    return this.nameValue;
+  }
+
+  public rename(name: string): void {
+    this.nameValue = name;
+  }
+
+  public get activePane(): Pane | null {
+    return this.activePaneId === null ? null : this.panes.get(this.activePaneId) ?? null;
+  }
+
+  public get activePaneIdValue(): number | null {
+    return this.activePaneId;
   }
 
   public createPane(options: SpawnOptions): Pane {
     const pane = new Pane(this.nextPaneId, "", options.command, options);
-    this.panes.set(pane.id, pane);
-    this.nextPaneId += 1;
+    this.insertPane(pane);
     return pane;
   }
 
   public createSessionBoundPane(sessionName: string, options: SpawnOptions): Pane {
     const pane = new Pane(this.nextPaneId, sessionName, options.command, options);
-    this.panes.set(pane.id, pane);
-    this.nextPaneId += 1;
+    this.insertPane(pane);
     return pane;
   }
 
-  public destroyPane(paneId: number): boolean {
+  public splitPane(
+    sessionName: string,
+    direction: SplitDirection,
+    options: SpawnOptions,
+    targetPaneId = this.activePaneId ?? 0,
+  ): Pane {
+    if (this.layout === null) {
+      return this.createSessionBoundPane(sessionName, options);
+    }
+
+    if (findLeaf(this.layout, targetPaneId) === null) {
+      throw new Error(`Pane ${targetPaneId} not found in window ${this.name}`);
+    }
+
+    const pane = new Pane(this.nextPaneId, sessionName, options.command, options);
+    this.panes.set(pane.id, pane);
+    this.nextPaneId += 1;
+
+    this.layout = replaceLeaf(this.layout, targetPaneId, {
+      type: "split",
+      direction,
+      first: { type: "pane", paneId: targetPaneId },
+      second: { type: "pane", paneId: pane.id },
+    });
+    this.activePaneId = pane.id;
+    return pane;
+  }
+
+  public destroyPane(paneId = this.activePaneId ?? 0): boolean {
     const pane = this.panes.get(paneId);
     if (!pane) {
       return false;
     }
 
     pane.kill();
-    return this.panes.delete(paneId);
+    this.panes.delete(paneId);
+    this.layout = removeLeaf(this.layout, paneId);
+    this.zoomedPaneId = this.zoomedPaneId === paneId ? null : this.zoomedPaneId;
+    this.activePaneId = this.chooseActivePane();
+    return true;
   }
 
   public getPane(paneId = 0): Pane {
@@ -278,15 +565,90 @@ export class Window {
   }
 
   public listPanes(): Pane[] {
-    return [...this.panes.values()];
+    const orderedIds = collectPaneIds(this.layout);
+    const seen = new Set<number>();
+    const ordered = orderedIds
+      .map((paneId) => {
+        seen.add(paneId);
+        return this.panes.get(paneId);
+      })
+      .filter((pane): pane is Pane => pane instanceof Pane);
+
+    for (const pane of this.panes.values()) {
+      if (!seen.has(pane.id)) {
+        ordered.push(pane);
+      }
+    }
+
+    return ordered;
+  }
+
+  public selectPane(paneId: number): Pane {
+    const pane = this.getPane(paneId);
+    this.activePaneId = pane.id;
+    return pane;
+  }
+
+  public moveFocus(direction: FocusDirection): Pane | null {
+    if (this.activePaneId === null || this.layout === null) {
+      return null;
+    }
+
+    const rects = new Map<number, Rect>();
+    computeRects(this.layout, { x: 0, y: 0, width: 1000, height: 1000 }, rects);
+    const nextPaneId = findNeighbor(this.activePaneId, direction, rects);
+    if (nextPaneId === null) {
+      return null;
+    }
+
+    return this.selectPane(nextPaneId);
+  }
+
+  public toggleZoom(): number | null {
+    if (this.activePaneId === null) {
+      return null;
+    }
+
+    this.zoomedPaneId = this.zoomedPaneId === this.activePaneId ? null : this.activePaneId;
+    return this.zoomedPaneId;
+  }
+
+  public clearZoom(): void {
+    this.zoomedPaneId = null;
+  }
+
+  public resizePanes(rects: Map<number, Rect>): void {
+    for (const pane of this.listPanes()) {
+      const rect = rects.get(pane.id);
+      if (!rect) {
+        continue;
+      }
+
+      pane.resize(Math.max(1, rect.width - 2), Math.max(1, rect.height - 2));
+    }
   }
 
   public snapshot(): WindowSnapshot {
     return {
       id: this.id,
       name: this.name,
+      activePaneId: this.activePaneId,
+      zoomedPaneId: this.zoomedPaneId,
       panes: this.listPanes().map((pane) => pane.snapshot()),
+      layout: cloneLayout(this.layout),
     };
+  }
+
+  private insertPane(pane: Pane): void {
+    this.panes.set(pane.id, pane);
+    this.nextPaneId += 1;
+    this.layout ??= { type: "pane", paneId: pane.id };
+    this.activePaneId = pane.id;
+  }
+
+  private chooseActivePane(): number | null {
+    const [nextPane] = this.listPanes();
+    return nextPane?.id ?? null;
   }
 }
 
@@ -294,11 +656,21 @@ export class Session {
   private readonly windows = new Map<string, Window>();
   private nextWindowId = 0;
   private readonly createdAtDate = new Date();
+  private activeWindowName: string | null = null;
+  private nameValue: string;
+  public readonly tags: Record<string, string>;
 
-  public readonly name: string;
+  public constructor(name: string, tags?: Record<string, string>) {
+    this.nameValue = name;
+    this.tags = { ...tags };
+  }
 
-  public constructor(name: string) {
-    this.name = name;
+  public get name(): string {
+    return this.nameValue;
+  }
+
+  public rename(name: string): void {
+    this.nameValue = name;
   }
 
   public createWindow(name = `window-${this.nextWindowId}`): Window {
@@ -309,6 +681,8 @@ export class Session {
     const window = new Window(this.nextWindowId, name);
     this.windows.set(name, window);
     this.nextWindowId += 1;
+    this.activeWindowName ??= name;
+    this.activeWindowName = name;
     return window;
   }
 
@@ -322,16 +696,55 @@ export class Session {
       return window;
     }
 
+    if (this.activeWindowName) {
+      const activeWindow = this.windows.get(this.activeWindowName);
+      if (activeWindow) {
+        return activeWindow;
+      }
+    }
+
     const first = this.listWindows()[0];
     if (!first) {
       throw new Error(`Session ${this.name} has no windows`);
     }
 
+    this.activeWindowName = first.name;
     return first;
   }
 
+  public getWindowById(id: number): Window {
+    const window = this.listWindows().find((candidate) => candidate.id === id);
+    if (!window) {
+      throw new Error(`Window ${id} not found in session ${this.name}`);
+    }
+
+    return window;
+  }
+
   public listWindows(): Window[] {
-    return [...this.windows.values()];
+    return [...this.windows.values()].sort((left, right) => left.id - right.id);
+  }
+
+  public selectWindow(nameOrId: string | number): Window {
+    const window =
+      typeof nameOrId === "number" ? this.getWindowById(nameOrId) : this.getWindow(nameOrId);
+    this.activeWindowName = window.name;
+    return window;
+  }
+
+  public renameWindow(currentName: string, nextName: string): Window {
+    if (this.windows.has(nextName)) {
+      throw new Error(`Window ${nextName} already exists in session ${this.name}`);
+    }
+
+    const window = this.getWindow(currentName);
+    this.windows.delete(currentName);
+    window.rename(nextName);
+    this.windows.set(nextName, window);
+    if (this.activeWindowName === currentName) {
+      this.activeWindowName = nextName;
+    }
+    return window;
   }
 
   public destroyWindow(name: string): boolean {
@@ -344,15 +757,42 @@ export class Session {
       pane.kill();
     }
 
-    return this.windows.delete(name);
+    const removed = this.windows.delete(name);
+    if (removed && this.activeWindowName === name) {
+      this.activeWindowName = this.listWindows()[0]?.name ?? null;
+    }
+    return removed;
   }
 
   public snapshot(): SessionSnapshot {
     return {
       name: this.name,
       createdAt: this.createdAtDate.toISOString(),
+      activeWindowId: this.activeWindowName ? this.getWindow(this.activeWindowName).id : null,
       windows: this.listWindows().map((window) => window.snapshot()),
+      tags: { ...this.tags },
     };
+  }
+
+  /** Returns true if all panes in all windows have exited. */
+  public get allExited(): boolean {
+    const allPanes = this.listWindows().flatMap((w) => w.listPanes());
+    return allPanes.length > 0 && allPanes.every((p) => !p.running);
+  }
+
+  /** Returns the most recent pane exit time, or null if any pane is still running. */
+  public get lastExitTime(): Date | null {
+    if (!this.allExited) return null;
+    let latest: Date | null = null;
+    for (const w of this.listWindows()) {
+      for (const p of w.listPanes()) {
+        const ended = p.endedAt;
+        if (ended && (!latest || ended.getTime() > latest.getTime())) {
+          latest = ended;
+        }
+      }
+    }
+    return latest;
   }
 }
 
@@ -361,19 +801,16 @@ export class SessionManager {
   private readonly sessions = new Map<string, Session>();
 
   public static getInstance(): SessionManager {
-    if (!SessionManager.instanceValue) {
-      SessionManager.instanceValue = new SessionManager();
-    }
-
+    SessionManager.instanceValue ??= new SessionManager();
     return SessionManager.instanceValue;
   }
 
-  public createSession(name: string): Session {
+  public createSession(name: string, tags?: Record<string, string>): Session {
     if (this.sessions.has(name)) {
       throw new Error(`Session ${name} already exists`);
     }
 
-    const session = new Session(name);
+    const session = new Session(name, tags);
     this.sessions.set(name, session);
     return session;
   }
@@ -387,12 +824,24 @@ export class SessionManager {
     return session;
   }
 
-  public getOrCreateSession(name: string): Session {
-    return this.sessions.get(name) ?? this.createSession(name);
+  public getOrCreateSession(name: string, tags?: Record<string, string>): Session {
+    const existing = this.sessions.get(name);
+    if (existing) {
+      if (tags) Object.assign(existing.tags, tags);
+      return existing;
+    }
+    return this.createSession(name, tags);
+  }
+
+  /** Get all Session objects (not snapshots). */
+  public getSessions(): Session[] {
+    return [...this.sessions.values()];
   }
 
   public listSessions(): SessionSnapshot[] {
-    return [...this.sessions.values()].map((session) => session.snapshot());
+    return [...this.sessions.values()]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((session) => session.snapshot());
   }
 
   public destroySession(name: string): boolean {
@@ -408,15 +857,58 @@ export class SessionManager {
     return this.sessions.delete(name);
   }
 
+  public renameSession(name: string, nextName: string): Session {
+    if (this.sessions.has(nextName)) {
+      throw new Error(`Session ${nextName} already exists`);
+    }
+
+    const session = this.getSession(name);
+    this.sessions.delete(name);
+    session.rename(nextName);
+    this.sessions.set(nextName, session);
+    return session;
+  }
+
   public spawnInSession(
     sessionName: string,
     options: SpawnOptions & { windowName?: string },
   ): { session: Session; window: Window; pane: Pane } {
     const session = this.getOrCreateSession(sessionName);
     const windowName = options.windowName ?? "main";
-    const window = session.listWindows().find((candidate) => candidate.name === windowName)
-      ?? session.createWindow(windowName);
-    const pane = window.createSessionBoundPane(sessionName, options);
+    const window =
+      session.listWindows().find((candidate) => candidate.name === windowName) ??
+      session.createWindow(windowName);
+    const pane =
+      window.listPanes().length === 0
+        ? window.createSessionBoundPane(sessionName, options)
+        : window.splitPane(sessionName, "vertical", options);
+    session.selectWindow(window.name);
+    return { session, window, pane };
+  }
+
+  public createSessionWithWindow(
+    sessionName: string,
+    options: SpawnOptions & { windowName?: string },
+  ): { session: Session; window: Window; pane: Pane } {
+    const session = this.getOrCreateSession(sessionName);
+    const window = session.listWindows()[0] ?? session.createWindow(options.windowName ?? "main");
+    const pane =
+      window.listPanes()[0] ??
+      window.createSessionBoundPane(session.name, {
+        ...options,
+        command: options.command,
+      });
+    session.selectWindow(window.name);
+    return { session, window, pane };
+  }
+
+  public createWindow(
+    sessionName: string,
+    options: SpawnOptions & { name?: string },
+  ): { session: Session; window: Window; pane: Pane } {
+    const session = this.getSession(sessionName);
+    const window = session.createWindow(options.name ?? `window-${session.listWindows().length}`);
+    const pane = window.createSessionBoundPane(session.name, options);
     return { session, window, pane };
   }
 
@@ -427,7 +919,7 @@ export class SessionManager {
   ): { session: Session; window: Window; pane: Pane; direction: SplitDirection } {
     const session = this.getSession(sessionName);
     const window = session.getWindow(options.windowName);
-    const pane = window.createSessionBoundPane(sessionName, options);
+    const pane = window.splitPane(session.name, direction, options);
     return { session, window, pane, direction };
   }
 }

@@ -2,9 +2,14 @@ import fs from "node:fs";
 import net from "node:net";
 import process from "node:process";
 import { loadConfig } from "./amux/config.js";
-import { SessionManager } from "./core.js";
+import { SessionManager, getDefaultShell } from "./core.js";
 import { AmuxStreamServer, DEFAULT_STREAM_PORT, getStreamPort } from "./stream.js";
 import { ApiRequest, ApiResponse } from "./types.js";
+import { grepPane } from "./search.js";
+import { diffPane, generateClientId } from "./diff.js";
+import { runCleanup, startCleanupTimer } from "./cleanup.js";
+import { saveTemplate, applyTemplate, listTemplates } from "./templates.js";
+import { listSessionsByTag } from "./tags.js";
 
 export const DEFAULT_SOCKET_PATH = "/tmp/amux.sock";
 
@@ -20,10 +25,15 @@ function failure(message: string): ApiResponse {
   return { ok: false, error: message };
 }
 
+function defaultCommand(): string {
+  return `exec ${getDefaultShell()}`;
+}
+
 export class AmuxServer {
   private server: net.Server | null = null;
   private streamServer: AmuxStreamServer | null = null;
   private readonly manager = SessionManager.getInstance();
+  private readonly clientIds = new WeakMap<net.Socket, string>();
 
   public async start(
     socketPath = getSocketPath(),
@@ -32,6 +42,7 @@ export class AmuxServer {
     await fs.promises.rm(socketPath, { force: true });
 
     this.server = net.createServer((socket) => {
+      this.clientIds.set(socket, generateClientId());
       let buffer = "";
 
       socket.setEncoding("utf8");
@@ -51,7 +62,7 @@ export class AmuxServer {
 
           try {
             const request = JSON.parse(raw) as ApiRequest;
-            response = this.handle(request);
+            response = this.handle(request, socket);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             response = failure(message);
@@ -70,6 +81,7 @@ export class AmuxServer {
 
       this.streamServer = new AmuxStreamServer();
       await this.streamServer.start(streamPort);
+      startCleanupTimer();
     } catch (error) {
       if (this.server) {
         await new Promise<void>((resolve) => {
@@ -99,9 +111,10 @@ export class AmuxServer {
     this.streamServer = null;
   }
 
-  private handle(request: ApiRequest): ApiResponse {
+  private handle(request: ApiRequest, socket: net.Socket): ApiResponse {
     switch (request.cmd) {
       case "spawn": {
+        const session = this.manager.getOrCreateSession(request.session, request.tags);
         const result = this.manager.spawnInSession(request.session, {
           command: request.exec,
           cwd: request.cwd,
@@ -117,8 +130,27 @@ export class AmuxServer {
           pane: result.pane.snapshot(),
         });
       }
-      case "list":
+      case "create-session": {
+        const result = this.manager.createSessionWithWindow(request.session, {
+          command: request.exec ?? defaultCommand(),
+          cwd: request.cwd,
+          env: request.env,
+          windowName: request.window,
+        });
+        return success({
+          session: result.session.snapshot(),
+          window: result.window.snapshot(),
+          pane: result.pane.snapshot(),
+        });
+      }
+      case "get-session":
+        return success(this.manager.getSession(request.session).snapshot());
+      case "list": {
+        if (request.filter?.tag) {
+          return success(listSessionsByTag(request.filter.tag));
+        }
         return success(this.manager.listSessions());
+      }
       case "tail": {
         const pane = this.manager
           .getSession(request.session)
@@ -134,7 +166,11 @@ export class AmuxServer {
         const pane = this.manager
           .getSession(request.session)
           .getWindow(request.window)
-          .getPane(request.pane ?? 0);
+          .getPane(
+            request.pane ??
+              this.manager.getSession(request.session).getWindow(request.window).activePaneIdValue ??
+              0,
+          );
         pane.write(request.data);
         return success({ session: request.session, pane: pane.id, written: request.data.length });
       }
@@ -152,7 +188,7 @@ export class AmuxServer {
       }
       case "split": {
         const result = this.manager.splitPane(request.session, request.direction, {
-          command: request.exec ?? "exec $SHELL",
+          command: request.exec ?? defaultCommand(),
           cwd: request.cwd,
           env: request.env,
           input: request.input,
@@ -166,6 +202,80 @@ export class AmuxServer {
           direction: result.direction,
         });
       }
+      case "create-window": {
+        const result = this.manager.createWindow(request.session, {
+          command: request.exec ?? defaultCommand(),
+          cwd: request.cwd,
+          env: request.env,
+          name: request.name,
+        });
+        return success({
+          session: result.session.snapshot(),
+          window: result.window.snapshot(),
+          pane: result.pane.snapshot(),
+        });
+      }
+      case "select-window": {
+        const session = this.manager.getSession(request.session);
+        const window = request.id !== undefined ? session.selectWindow(request.id) : session.selectWindow(request.window ?? 0);
+        return success({ session: session.snapshot(), window: window.snapshot() });
+      }
+      case "rename-window": {
+        const session = this.manager.getSession(request.session);
+        const currentName = request.window ?? session.getWindow().name;
+        const window = session.renameWindow(currentName, request.name);
+        return success({ session: session.snapshot(), window: window.snapshot() });
+      }
+      case "rename-session": {
+        const session = this.manager.renameSession(request.session, request.name);
+        return success(session.snapshot());
+      }
+      case "select-pane": {
+        const session = this.manager.getSession(request.session);
+        const window = session.getWindow(request.window);
+        const pane = window.selectPane(request.pane);
+        return success({ session: session.snapshot(), window: window.snapshot(), pane: pane.snapshot() });
+      }
+      case "move-pane-focus": {
+        const session = this.manager.getSession(request.session);
+        const window = session.getWindow(request.window);
+        const pane = window.moveFocus(request.direction);
+        return success({ session: session.snapshot(), window: window.snapshot(), pane: pane?.snapshot() ?? null });
+      }
+      case "kill-pane": {
+        const session = this.manager.getSession(request.session);
+        const window = session.getWindow(request.window);
+        const killed = window.destroyPane(request.pane);
+        return success({ session: session.snapshot(), window: window.snapshot(), killed });
+      }
+      case "toggle-zoom": {
+        const session = this.manager.getSession(request.session);
+        const window = session.getWindow(request.window);
+        const zoomedPaneId = window.toggleZoom();
+        return success({ session: session.snapshot(), window: window.snapshot(), zoomedPaneId });
+      }
+      case "grep":
+        return success(grepPane(request.session, request.pattern, {
+          pane: request.pane,
+          window: request.window,
+          lastLines: request.lastLines,
+          context: request.context,
+        }));
+      case "diff": {
+        const clientId = request.clientId ?? this.clientIds.get(socket) ?? generateClientId();
+        return success(diffPane(request.session, clientId, {
+          pane: request.pane,
+          window: request.window,
+        }));
+      }
+      case "clean":
+        return success(runCleanup());
+      case "template-save":
+        return success(saveTemplate(request.name, request.session));
+      case "template-apply":
+        return success(applyTemplate(request.name));
+      case "template-list":
+        return success(listTemplates());
       default:
         return failure("Unsupported command");
     }
