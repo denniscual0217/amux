@@ -1,12 +1,28 @@
 {
   "name": "amux",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "version": "0.1.0",
+  "description": "Agent-native terminal multiplexer — like tmux, but with a JSON API for AI agents",
+  "main": "dist/amux/server.js",
+  "bin": {
+    "amux": "./dist/amux/cli.js"
   },
-  "keywords": [],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/amux/server.js",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "terminal",
+    "multiplexer",
+    "tmux",
+    "agent",
+    "pty",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dnakov/amux"
+  },
   "author": "",
   "license": "ISC",
   "dependencies": {
