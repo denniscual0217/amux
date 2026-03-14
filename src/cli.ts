@@ -15,6 +15,7 @@ function printUsage(): void {
       "Usage:",
       "  amux                                          Launch TUI (auto-start daemon)",
       "  amux start                                    Start daemon in foreground",
+      "  amux status                                   Show daemon & session status",
       "  amux stop                                     Stop the daemon",
       "  amux restart                                  Restart the daemon",
       "  amux attach -t <session>                      Attach TUI to session",
@@ -159,6 +160,31 @@ async function main(): Promise<void> {
 
   if (command === "help" || command === "--help" || command === "-h") {
     printUsage();
+    return;
+  }
+
+  if (command === "status") {
+    const socketPath = getSocketPath();
+    try {
+      const sessions = await send<SessionSnapshot[]>({ cmd: "list" });
+      const running = sessions.filter(s => s.windows.some(w => w.panes.some(p => p.running)));
+      const exited = sessions.filter(s => !s.windows.some(w => w.panes.some(p => p.running)));
+      const totalPanes = sessions.reduce((sum, s) => sum + s.windows.reduce((ws, w) => ws + w.panes.length, 0), 0);
+      console.log(`amux is running`);
+      console.log(`  Socket:   ${socketPath}`);
+      console.log(`  Sessions: ${sessions.length} (${running.length} active, ${exited.length} exited)`);
+      console.log(`  Panes:    ${totalPanes}`);
+      if (sessions.length > 0) {
+        console.log("");
+        for (const s of sessions) {
+          const panes = s.windows.reduce((sum, w) => sum + w.panes.length, 0);
+          const active = s.windows.some(w => w.panes.some(p => p.running));
+          console.log(`  ${active ? "●" : "○"} ${s.name}  ${s.windows.length} window(s), ${panes} pane(s)`);
+        }
+      }
+    } catch {
+      console.log("amux is not running");
+    }
     return;
   }
 
