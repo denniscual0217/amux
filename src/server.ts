@@ -7,7 +7,7 @@ import { AmuxStreamServer, DEFAULT_STREAM_PORT, getStreamPort } from "./stream.j
 import { ApiRequest, ApiResponse } from "./types.js";
 import { grepPane } from "./search.js";
 import { diffPane, generateClientId } from "./diff.js";
-import { runCleanup, startCleanupTimer } from "./cleanup.js";
+
 import { saveTemplate, applyTemplate, listTemplates } from "./templates.js";
 import { listSessionsByTag } from "./tags.js";
 
@@ -81,7 +81,7 @@ export class AmuxServer {
 
       this.streamServer = new AmuxStreamServer();
       await this.streamServer.start(streamPort);
-      startCleanupTimer();
+
     } catch (error) {
       if (this.server) {
         await new Promise<void>((resolve) => {
@@ -281,8 +281,7 @@ export class AmuxServer {
           window: request.window,
         }));
       }
-      case "clean":
-        return success(runCleanup());
+
       case "template-save":
         return success(saveTemplate(request.name, request.session));
       case "template-apply":
