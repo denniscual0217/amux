@@ -387,6 +387,9 @@ export class TuiApp {
       case "toggle-sidebar":
         this.toggleSidebar();
         return;
+      case "toggle-sidebar-focus":
+        this.toggleSidebarFocus();
+        return;
       case "literal-input":
         if (this.sidebar.focused) {
           return;
@@ -748,6 +751,27 @@ export class TuiApp {
       this.sidebar.focused = false;
     } else {
       this.sidebar.visible = true;
+      this.sidebar.focused = false;
+      const items = this.getSidebarItems();
+      const activeWindowId = this.currentSnapshot().activeWindowId;
+      const activeIndex =
+        items.findIndex(
+          (item) =>
+            item.kind === "window" &&
+            item.sessionName === this.sessionName &&
+            item.windowId === activeWindowId,
+        ) ??
+        -1;
+      this.sidebar.selectedIndex = Math.max(0, activeIndex);
+    }
+    this.syncPaneSizes();
+    this.render();
+  }
+
+  private toggleSidebarFocus(): void {
+    this.ensureSidebarState();
+    if (!this.sidebar.visible) {
+      this.sidebar.visible = true;
       this.sidebar.focused = true;
       const items = this.getSidebarItems();
       const activeWindowId = this.currentSnapshot().activeWindowId;
@@ -760,6 +784,8 @@ export class TuiApp {
         ) ??
         -1;
       this.sidebar.selectedIndex = Math.max(0, activeIndex);
+    } else {
+      this.sidebar.focused = !this.sidebar.focused;
     }
     this.syncPaneSizes();
     this.render();
