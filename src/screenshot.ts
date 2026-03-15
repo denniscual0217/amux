@@ -1,7 +1,11 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { PaneScreenSnapshot } from "./core.js";
+import { Terminal as HeadlessTerminal } from "@xterm/headless";
+import { CopyModeState } from "./tui/copypaste.js";
+import { TerminalRenderer, type SidebarItem } from "./tui/renderer.js";
+import { renderTerminalLine, type PaneScreenSnapshot } from "./core.js";
+import type { SessionSnapshot } from "./types.js";
 
 const ESC = "\u001B";
 const ANSI_SGR_PATTERN = /\u001B\[([0-9;]*)m/g;
@@ -67,6 +71,11 @@ interface RenderedStyle {
 
 export interface ScreenshotSvgOptions {
   title?: string;
+}
+
+export interface TuiScreenshotOptions extends ScreenshotSvgOptions {
+  cols?: number;
+  rows?: number;
 }
 
 function createDefaultStyle(): ParsedStyle {
@@ -477,12 +486,67 @@ export function renderScreenshotSvg(snapshot: PaneScreenSnapshot, options: Scree
   ].join("");
 }
 
-export function writeScreenshotPng(
-  snapshot: PaneScreenSnapshot,
-  outputPath: string,
-  options: ScreenshotSvgOptions = {},
-): string {
-  const svg = renderScreenshotSvg(snapshot, options);
+function currentWindow(session: SessionSnapshot) {
+  return (
+    session.windows.find((window) => window.id === session.activeWindowId) ??
+    session.windows[0] ?? {
+      id: 0,
+      name: "main",
+      activePaneId: null,
+      zoomedPaneId: null,
+      panes: [],
+      layout: null,
+    }
+  );
+}
+
+function buildSidebarItems(session: SessionSnapshot, sessions: SessionSnapshot[]): SidebarItem[] {
+  const items: SidebarItem[] = [];
+  for (const candidate of sessions) {
+    const expanded = candidate.name === session.name;
+    items.push({
+      kind: "session",
+      sessionName: candidate.name,
+      expanded,
+      active: candidate.name === session.name,
+    });
+    if (!expanded) {
+      continue;
+    }
+    for (const window of candidate.windows) {
+      items.push({
+        kind: "window",
+        sessionName: candidate.name,
+        windowId: window.id,
+        windowName: window.name,
+        active: candidate.name === session.name && window.id === candidate.activeWindowId,
+      });
+    }
+  }
+  return items;
+}
+
+function snapshotFromTerminal(terminal: HeadlessTerminal): PaneScreenSnapshot {
+  const buffer = terminal.buffer.active;
+  const startLine = buffer.viewportY;
+  const lines: string[] = [];
+
+  for (let row = 0; row < terminal.rows; row += 1) {
+    lines.push(renderTerminalLine(startLine + row, terminal));
+  }
+
+  return {
+    lines,
+    cursor: {
+      row: Math.max(0, Math.min(terminal.rows - 1, buffer.cursorY)),
+      col: Math.max(0, Math.min(terminal.cols - 1, buffer.cursorX)),
+    },
+    rows: terminal.rows,
+    cols: terminal.cols,
+  };
+}
+
+function writeSvgPng(svg: string, outputPath: string): string {
   const absoluteOutputPath = path.resolve(outputPath);
 
   fs.mkdirSync(path.dirname(absoluteOutputPath), { recursive: true });
@@ -492,6 +556,62 @@ export function writeScreenshotPng(
   });
 
   return absoluteOutputPath;
+}
+
+export function renderTuiScreenshot(
+  session: SessionSnapshot,
+  sessions: SessionSnapshot[],
+  paneScreens: Map<number, PaneScreenSnapshot>,
+  outputPath: string,
+  options: TuiScreenshotOptions = {},
+): string {
+  const cols = Math.max(1, options.cols ?? 120);
+  const rows = Math.max(2, options.rows ?? 30);
+  const sidebarItems = buildSidebarItems(session, sessions);
+  const current = currentWindow(session);
+  const sessionIndex = sidebarItems.findIndex((item) => item.kind === "session" && item.sessionName === session.name);
+  const frameRenderer = new TerminalRenderer();
+  frameRenderer.resize(cols, rows);
+  const frame = frameRenderer.render({
+    session,
+    sessions,
+    paneBuffers: new Map(),
+    paneScreens,
+    copyMode: new CopyModeState(),
+    sidebar: {
+      visible: true,
+      focused: false,
+      width: TerminalRenderer.SIDEBAR_WIDTH,
+      items: sidebarItems,
+      selectedIndex: Math.max(0, sessionIndex),
+    },
+    overlay: null,
+    message: null,
+  });
+
+  const terminal = new HeadlessTerminal({
+    cols,
+    rows,
+    allowProposedApi: true,
+    scrollback: 0,
+  });
+  (terminal as HeadlessTerminal & { writeSync(data: string): void }).writeSync(frame);
+
+  const snapshot = snapshotFromTerminal(terminal);
+  return writeSvgPng(
+    renderScreenshotSvg(snapshot, {
+      title: options.title ?? `${session.name}:${current.name}`,
+    }),
+    outputPath,
+  );
+}
+
+export function writeScreenshotPng(
+  snapshot: PaneScreenSnapshot,
+  outputPath: string,
+  options: ScreenshotSvgOptions = {},
+): string {
+  return writeSvgPng(renderScreenshotSvg(snapshot, options), outputPath);
 }
 
 export function stripAnsi(value: string): string {

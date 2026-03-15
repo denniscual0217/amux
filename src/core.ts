@@ -413,7 +413,7 @@ function cellStyle(cell: IBufferCell): CellStyle {
   };
 }
 
-function renderTerminalLine(lineIndex: number, terminal: HeadlessTerminal): string {
+export function renderTerminalLine(lineIndex: number, terminal: HeadlessTerminal): string {
   const line = terminal.buffer.active.getLine(lineIndex);
   if (!line) {
     return " ".repeat(terminal.cols);

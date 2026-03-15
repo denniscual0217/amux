@@ -1,14 +1,23 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { WebSocket } from "ws";
 import { getDefaultShell } from "./core.js";
-import { writeScreenshotPng } from "./screenshot.js";
+import { renderTuiScreenshot, writeScreenshotPng } from "./screenshot.js";
 import { getSocketPath, getStreamPortFromConfig, startServer } from "./server.js";
 import { ApiRequest, ApiResponse, SessionSnapshot, StreamMessage } from "./types.js";
 import type { PaneScreenSnapshot } from "./core.js";
+
+interface TuiScreenshotResponse {
+  session: SessionSnapshot;
+  sessions: SessionSnapshot[];
+  paneScreens: Record<string, PaneScreenSnapshot>;
+  cols?: number;
+  rows?: number;
+}
 
 function printUsage(): void {
   console.log(
@@ -27,7 +36,7 @@ function printUsage(): void {
       "      --input <text>                             Send input after spawn",
       "  amux list                                     List all sessions",
       "  amux tail <session> [--lines N] [--strip-ansi] Get pane output",
-      "  amux screenshot <session> [-p <pane>] [-o <output.png>] Capture pane screen as PNG",
+      "  amux screenshot <session> [--tui] [-p <pane>] [-o <output.png>] [--cols N] [--rows N] Capture pane screen as PNG",
       "  amux stream <session> [--pane N]              Live stream pane output",
       "  amux write <session> <data>                   Send input to session",
       "  amux kill <session>                           Kill a session",
@@ -67,8 +76,10 @@ function sanitizeFileSegment(value: string): string {
 }
 
 function defaultScreenshotPath(session: string): string {
+  const dir = "/tmp/amux/screenshots";
+  fs.mkdirSync(dir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return path.resolve(process.cwd(), `screenshot-${sanitizeFileSegment(session)}-${timestamp}.png`);
+  return path.resolve(dir, `screenshot-${sanitizeFileSegment(session)}-${timestamp}.png`);
 }
 
 async function send<T = unknown>(request: ApiRequest): Promise<T> {
@@ -344,21 +355,51 @@ async function main(): Promise<void> {
         throw new Error("screenshot requires <session>");
       }
 
+      const tui = takeFlag(args, "--tui");
       const paneValue = takeOption(args, ["-p", "--pane"]);
       const output = takeOption(args, ["-o", "--output"]) ?? defaultScreenshotPath(session);
+      const colsValue = takeOption(args, ["--cols"]);
+      const rowsValue = takeOption(args, ["--rows"]);
       const pane = paneValue === undefined ? undefined : Number.parseInt(paneValue, 10);
       if (paneValue !== undefined && Number.isNaN(pane)) {
         throw new Error("--pane must be a number");
       }
+      const cols = colsValue === undefined ? undefined : Number.parseInt(colsValue, 10);
+      const rows = rowsValue === undefined ? undefined : Number.parseInt(rowsValue, 10);
+      if (colsValue !== undefined && (!Number.isInteger(cols) || (cols ?? 0) <= 0)) {
+        throw new Error("--cols must be a positive number");
+      }
+      if (rowsValue !== undefined && (!Number.isInteger(rows) || (rows ?? 0) <= 0)) {
+        throw new Error("--rows must be a positive number");
+      }
 
-      const snapshot = await send<PaneScreenSnapshot>({
-        cmd: "screenshot",
-        session,
-        pane,
-      });
-      const writtenPath = writeScreenshotPng(snapshot, output, {
-        title: pane === undefined ? session : `${session} pane ${pane}`,
-      });
+      if (tui) {
+        const snapshot = await send<TuiScreenshotResponse>({
+          cmd: "screenshot",
+          session,
+          tui: true,
+          cols,
+          rows,
+        });
+        const writtenPath = renderTuiScreenshot(
+          snapshot.session,
+          snapshot.sessions,
+          new Map(
+            Object.entries(snapshot.paneScreens).map(([paneId, paneScreen]) => [Number.parseInt(paneId, 10), paneScreen]),
+          ),
+          output,
+          {
+            title: `${snapshot.session.name} TUI`,
+            cols,
+            rows,
+          },
+        );
+        process.stdout.write(`${writtenPath}\n`);
+        return;
+      }
+
+      const snapshot = await send<PaneScreenSnapshot>({ cmd: "screenshot", session, pane });
+      const writtenPath = writeScreenshotPng(snapshot, output, { title: pane === undefined ? session : `${session} pane ${pane}` });
       process.stdout.write(`${writtenPath}\n`);
       return;
     }

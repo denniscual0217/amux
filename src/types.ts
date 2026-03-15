@@ -103,6 +103,9 @@ export interface ScreenshotRequest {
   cmd: "screenshot";
   session: string;
   pane?: number;
+  tui?: boolean;
+  cols?: number;
+  rows?: number;
 }
 
 export interface WriteRequest {
