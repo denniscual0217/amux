@@ -71,6 +71,13 @@ interface RenderedStyle {
 
 export interface ScreenshotSvgOptions {
   title?: string;
+  sidebar?: {
+    widthCols: number;
+    separatorCols?: number;
+    background?: string;
+    separatorColor?: string;
+    separatorWidth?: number;
+  };
 }
 
 export interface TuiScreenshotOptions extends ScreenshotSvgOptions {
@@ -425,6 +432,10 @@ export function renderScreenshotSvg(snapshot: PaneScreenSnapshot, options: Scree
   const width = snapshot.cols * CELL_WIDTH;
   const height = snapshot.rows * CELL_HEIGHT + CHROME_HEIGHT;
   const title = options.title ?? "amux screenshot";
+  const sidebarWidthCols = Math.max(0, options.sidebar?.widthCols ?? 0);
+  const sidebarSeparatorCols = Math.max(0, options.sidebar?.separatorCols ?? 0);
+  const sidebarPixelWidth = sidebarWidthCols * CELL_WIDTH;
+  const separatorX = sidebarPixelWidth;
   const backgroundRects: string[] = [];
   const textNodes: string[] = [];
   const decorationNodes: string[] = [];
@@ -479,7 +490,17 @@ export function renderScreenshotSvg(snapshot: PaneScreenSnapshot, options: Scree
     `<circle cx="32" cy="15" r="5" fill="#febc2e"/>`,
     `<circle cx="48" cy="15" r="5" fill="#28c840"/>`,
     `<text x="${width / 2}" y="19" text-anchor="middle" fill="#444444" font-family="${escapeXml(FONT_FAMILY)}" font-size="12">${escapeXml(title)}</text>`,
+    ...(sidebarPixelWidth > 0
+      ? [
+          `<rect x="0" y="${CHROME_HEIGHT}" width="${sidebarPixelWidth}" height="${height - CHROME_HEIGHT}" fill="${options.sidebar?.background ?? "#252526"}"/>`,
+        ]
+      : []),
     ...backgroundRects,
+    ...(sidebarSeparatorCols > 0
+      ? [
+          `<rect x="${separatorX}" y="${CHROME_HEIGHT}" width="${options.sidebar?.separatorWidth ?? 1.5}" height="${height - CHROME_HEIGHT}" fill="${options.sidebar?.separatorColor ?? "#444444"}"/>`,
+        ]
+      : []),
     ...textNodes,
     ...decorationNodes,
     `</svg>`,
@@ -601,6 +622,13 @@ export async function renderTuiScreenshot(
   return writeSvgPng(
     renderScreenshotSvg(snapshot, {
       title: options.title ?? `${session.name}:${current.name}`,
+      sidebar: {
+        widthCols: Math.max(0, TerminalRenderer.SIDEBAR_WIDTH - 1),
+        separatorCols: 1,
+        background: "#252526",
+        separatorColor: "#444444",
+        separatorWidth: 1.5,
+      },
     }),
     outputPath,
   );
