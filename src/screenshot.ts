@@ -558,13 +558,13 @@ function writeSvgPng(svg: string, outputPath: string): string {
   return absoluteOutputPath;
 }
 
-export function renderTuiScreenshot(
+export async function renderTuiScreenshot(
   session: SessionSnapshot,
   sessions: SessionSnapshot[],
   paneScreens: Map<number, PaneScreenSnapshot>,
   outputPath: string,
   options: TuiScreenshotOptions = {},
-): string {
+): Promise<string> {
   const cols = Math.max(1, options.cols ?? 120);
   const rows = Math.max(2, options.rows ?? 30);
   const sidebarItems = buildSidebarItems(session, sessions);
@@ -595,7 +595,7 @@ export function renderTuiScreenshot(
     allowProposedApi: true,
     scrollback: 0,
   });
-  (terminal as HeadlessTerminal & { writeSync(data: string): void }).writeSync(frame);
+  await new Promise<void>((resolve) => terminal.write(frame, resolve));
 
   const snapshot = snapshotFromTerminal(terminal);
   return writeSvgPng(

@@ -381,7 +381,7 @@ async function main(): Promise<void> {
           cols,
           rows,
         });
-        const writtenPath = renderTuiScreenshot(
+        const writtenPath = await renderTuiScreenshot(
           snapshot.session,
           snapshot.sessions,
           new Map(
