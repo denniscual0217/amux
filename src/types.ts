@@ -320,12 +320,14 @@ export type ApiResponse<T = unknown> = ApiSuccess<T> | ApiError;
 export interface StreamSubscribeCommand {
   cmd: "subscribe";
   session: string;
+  window?: number;
   pane?: number;
 }
 
 export interface StreamUnsubscribeCommand {
   cmd: "unsubscribe";
   session: string;
+  window?: number;
   pane?: number;
 }
 

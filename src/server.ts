@@ -2,7 +2,7 @@ import fs from "node:fs";
 import net from "node:net";
 import process from "node:process";
 import { loadConfig } from "./amux/config.js";
-import { SessionManager, getDefaultShell } from "./core.js";
+import { Session, SessionManager, getDefaultShell } from "./core.js";
 import { AmuxStreamServer, DEFAULT_STREAM_PORT, getStreamPort } from "./stream.js";
 import { TuiApp } from "./tui/app.js";
 import { ApiRequest, ApiResponse, type AttachMessage } from "./types.js";
@@ -28,6 +28,10 @@ function failure(message: string): ApiResponse {
 
 function defaultCommand(): string {
   return `exec ${getDefaultShell()}`;
+}
+
+function resolveWindow(session: Session, window: string | number | undefined) {
+  return typeof window === "number" ? session.getWindowById(window) : session.getWindow(window);
 }
 
 export class AmuxServer {
@@ -219,10 +223,8 @@ export class AmuxServer {
         return success(this.manager.listSessions());
       }
       case "tail": {
-        const pane = this.manager
-          .getSession(request.session)
-          .getWindow(request.window)
-          .getPane(request.pane ?? 0);
+        const session = this.manager.getSession(request.session);
+        const pane = resolveWindow(session, request.window).getPane(request.pane ?? 0);
         return success({
           session: request.session,
           pane: pane.id,
@@ -258,14 +260,9 @@ export class AmuxServer {
         });
       }
       case "write": {
-        const pane = this.manager
-          .getSession(request.session)
-          .getWindow(request.window)
-          .getPane(
-            request.pane ??
-              this.manager.getSession(request.session).getWindow(request.window).activePaneIdValue ??
-              0,
-          );
+        const session = this.manager.getSession(request.session);
+        const window = resolveWindow(session, request.window);
+        const pane = window.getPane(request.pane ?? window.activePaneIdValue ?? 0);
         pane.write(request.data);
         return success({ session: request.session, pane: pane.id, written: request.data.length });
       }
@@ -278,7 +275,7 @@ export class AmuxServer {
         return success(session.listWindows().map((window) => window.snapshot()));
       }
       case "list-panes": {
-        const window = this.manager.getSession(request.session).getWindow(request.window);
+        const window = resolveWindow(this.manager.getSession(request.session), request.window);
         return success(window.listPanes().map((pane) => pane.snapshot()));
       }
       case "split": {

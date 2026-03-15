@@ -12,14 +12,15 @@ export const DEFAULT_STREAM_PORT = 7777;
 
 interface StreamSubscription {
   session: string;
+  window?: number;
   pane: number;
   paneRef: Pane;
   onData: (event: { chunk: string }) => void;
   onExit: (event: { code: number | null; duration: string }) => void;
 }
 
-function streamKey(session: string, pane: number): string {
-  return `${session}:${pane}`;
+function streamKey(session: string, window: number | undefined, pane: number): string {
+  return `${session}:${window ?? "active"}:${pane}`;
 }
 
 export function getStreamPort(): number {
@@ -93,10 +94,10 @@ export class AmuxStreamServer {
 
     switch (command.cmd) {
       case "subscribe":
-        this.subscribe(socket, command.session, command.pane ?? 0);
+        this.subscribe(socket, command.session, command.window, command.pane ?? 0);
         return;
       case "unsubscribe":
-        this.unsubscribe(socket, command.session, command.pane ?? 0);
+        this.unsubscribe(socket, command.session, command.window, command.pane ?? 0);
         return;
       case "streams":
         this.send(socket, this.listStreams());
@@ -106,15 +107,18 @@ export class AmuxStreamServer {
     }
   }
 
-  private subscribe(socket: WebSocket, session: string, paneId: number): void {
+  private subscribe(socket: WebSocket, session: string, windowId: number | undefined, paneId: number): void {
     try {
-      const pane = this.manager.getSession(session).getWindow().getPane(paneId);
+      const sessionRef = this.manager.getSession(session);
+      const pane = (windowId !== undefined
+        ? sessionRef.getWindowById(windowId)
+        : sessionRef.getWindow()).getPane(paneId);
       const socketSubscriptions = this.subscriptions.get(socket);
       if (!socketSubscriptions) {
         return;
       }
 
-      const key = streamKey(session, paneId);
+      const key = streamKey(session, windowId, paneId);
       if (socketSubscriptions.has(key)) {
         this.send(socket, { event: "subscribed", session, pane: paneId });
         return;
@@ -129,7 +133,7 @@ export class AmuxStreamServer {
 
       pane.on("data", onData);
       pane.on("exit", onExit);
-      socketSubscriptions.set(key, { session, pane: paneId, paneRef: pane, onData, onExit });
+      socketSubscriptions.set(key, { session, window: windowId, pane: paneId, paneRef: pane, onData, onExit });
 
       this.send(socket, { event: "subscribed", session, pane: paneId });
 
@@ -150,13 +154,13 @@ export class AmuxStreamServer {
     }
   }
 
-  private unsubscribe(socket: WebSocket, session: string, paneId: number): void {
+  private unsubscribe(socket: WebSocket, session: string, windowId: number | undefined, paneId: number): void {
     const socketSubscriptions = this.subscriptions.get(socket);
     if (!socketSubscriptions) {
       return;
     }
 
-    const key = streamKey(session, paneId);
+    const key = streamKey(session, windowId, paneId);
     const subscription = socketSubscriptions.get(key);
     if (!subscription) {
       this.send(socket, { event: "error", message: `No active subscription for ${session}:${paneId}` });
@@ -191,7 +195,7 @@ export class AmuxStreamServer {
 
     for (const socketSubscriptions of this.subscriptions.values()) {
       for (const subscription of socketSubscriptions.values()) {
-        const key = streamKey(subscription.session, subscription.pane);
+        const key = streamKey(subscription.session, subscription.window, subscription.pane);
         const current = counts.get(key);
         if (current) {
           current.subscribers += 1;
