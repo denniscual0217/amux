@@ -13,7 +13,12 @@ import type { PaneExitEvent, PaneDataEvent } from "../core.js";
 import type { SessionSnapshot } from "../types.js";
 import { CopyModeState } from "./copypaste.js";
 import { KeyBindingHandler, type TuiAction } from "./keybindings.js";
-import { type OverlayState, type PaneBuffer, TerminalRenderer } from "./renderer.js";
+import {
+  type OverlayState,
+  type PaneBuffer,
+  type SidebarItem,
+  TerminalRenderer,
+} from "./renderer.js";
 
 interface PromptState {
   kind: "rename-window" | "rename-session" | "confirm-kill-pane";
@@ -23,6 +28,13 @@ interface PromptState {
 interface TuiAppOptions {
   showSessionPicker?: boolean;
   writeFrame?: (frame: string) => void;
+}
+
+interface SidebarUiState {
+  visible: boolean;
+  focused: boolean;
+  selectedIndex: number;
+  expandedSessions: Set<string>;
 }
 
 function createPaneBuffer(lines: string[] = []): PaneBuffer {
@@ -89,6 +101,12 @@ export class TuiApp {
   private prompt: PromptState | null = null;
   private message: string | null = null;
   private stopResolve: (() => void) | null = null;
+  private readonly sidebar: SidebarUiState = {
+    visible: false,
+    focused: false,
+    selectedIndex: 0,
+    expandedSessions: new Set<string>(),
+  };
 
   public constructor(
     private sessionName: string,
@@ -157,6 +175,12 @@ export class TuiApp {
     if (this.overlay) {
       void this.handleOverlayInput(chunk);
       return;
+    }
+
+    if (this.sidebar.focused) {
+      if (this.handleSidebarInput(chunk)) {
+        return;
+      }
     }
 
     this.keybindings.feed(chunk, this.copyMode.active);
@@ -240,9 +264,17 @@ export class TuiApp {
       this.writeFrame(
         this.renderer.render({
           session: this.currentSnapshot(),
+          sessions: this.manager.listSessions(),
           paneBuffers: this.paneBuffers,
           paneScreens: this.paneScreens,
           copyMode: this.copyMode,
+          sidebar: {
+            visible: this.sidebar.visible,
+            focused: this.sidebar.focused,
+            width: TerminalRenderer.SIDEBAR_WIDTH,
+            items: this.getSidebarItems(),
+            selectedIndex: this.sidebar.selectedIndex,
+          },
           overlay: this.overlay,
           message: this.prompt ? `${this.prompt.kind}: ${this.prompt.value}` : this.message,
         }),
@@ -252,7 +284,16 @@ export class TuiApp {
 
   private syncPaneSizes(): void {
     const window = this.currentWindow();
-    const regions = this.renderer.getRegions(this.currentSnapshot());
+    const regions = this.renderer.getRegionsForState({
+      session: this.currentSnapshot(),
+      sidebar: {
+        visible: this.sidebar.visible,
+        focused: this.sidebar.focused,
+        width: TerminalRenderer.SIDEBAR_WIDTH,
+        items: [],
+        selectedIndex: this.sidebar.selectedIndex,
+      },
+    });
     window.resizePanes(
       new Map(
         regions.map((region) => [
@@ -268,6 +309,7 @@ export class TuiApp {
 
   private async refreshWindowState(): Promise<void> {
     this.refreshSessionState();
+    this.ensureSidebarState();
     this.normalizeWindowPanes(true);
     this.seedBuffers();
     this.bindCurrentWindow();
@@ -327,6 +369,7 @@ export class TuiApp {
       ) ?? remaining[0];
 
     this.sessionName = next.name;
+    this.ensureSidebarState();
     await this.refreshWindowState();
   }
 
@@ -341,7 +384,13 @@ export class TuiApp {
       case "detach":
         this.stop();
         return;
+      case "toggle-sidebar":
+        this.toggleSidebar();
+        return;
       case "literal-input":
+        if (this.sidebar.focused) {
+          return;
+        }
         if (this.copyMode.active) {
           this.handleCopyInput(action.data);
         } else {
@@ -353,6 +402,7 @@ export class TuiApp {
         this.manager.createWindow(this.sessionName, {
           command: `exec ${getDefaultShell()}`,
         });
+        this.sidebar.expandedSessions.add(this.sessionName);
         await this.refreshWindowState();
         return;
       case "next-window":
@@ -364,12 +414,14 @@ export class TuiApp {
         const nextWindow = windows[nextIndex];
         if (nextWindow) {
           session.selectWindow(nextWindow.id);
+          this.ensureSidebarState();
           await this.refreshWindowState();
         }
         return;
       }
       case "select-window":
         session.selectWindow(action.index);
+        this.ensureSidebarState();
         await this.refreshWindowState();
         return;
       case "split":
@@ -525,8 +577,13 @@ export class TuiApp {
     }
 
     const nextName = prompt.value.trim() || this.sessionName;
+    if (nextName !== this.sessionName && this.sidebar.expandedSessions.has(this.sessionName)) {
+      this.sidebar.expandedSessions.delete(this.sessionName);
+      this.sidebar.expandedSessions.add(nextName);
+    }
     this.manager.renameSession(this.sessionName, nextName);
     this.sessionName = nextName;
+    this.ensureSidebarState();
     await this.refreshWindowState();
   }
 
@@ -561,6 +618,7 @@ export class TuiApp {
       const selected = this.currentSession().listWindows()[this.overlay.selectedIndex];
       if (selected) {
         this.currentSession().selectWindow(selected.id);
+        this.ensureSidebarState();
         await this.refreshWindowState();
       }
     } else {
@@ -568,11 +626,142 @@ export class TuiApp {
       const selected = sessions[this.overlay.selectedIndex];
       if (selected) {
         this.sessionName = selected.name;
+        this.ensureSidebarState();
         await this.refreshWindowState();
       }
     }
 
     this.overlay = null;
+    this.render();
+  }
+
+  private getSidebarItems(): SidebarItem[] {
+    const sessions = this.manager.listSessions();
+    const items: SidebarItem[] = [];
+    for (const snapshot of sessions) {
+      const expanded = this.sidebar.expandedSessions.has(snapshot.name);
+      items.push({
+        kind: "session",
+        sessionName: snapshot.name,
+        expanded,
+        active: snapshot.name === this.sessionName,
+      });
+      if (!expanded) {
+        continue;
+      }
+      for (const sidebarWindow of snapshot.windows) {
+        items.push({
+          kind: "window",
+          sessionName: snapshot.name,
+          windowId: sidebarWindow.id,
+          windowName: sidebarWindow.name,
+          active: snapshot.name === this.sessionName && sidebarWindow.id === snapshot.activeWindowId,
+        });
+      }
+    }
+    return items;
+  }
+
+  private ensureSidebarState(): void {
+    const sessions = this.manager.listSessions();
+    if (!sessions.some((snapshot) => snapshot.name === this.sessionName) && sessions[0]) {
+      this.sessionName = sessions[0].name;
+    }
+
+    if (!this.sidebar.expandedSessions.has(this.sessionName)) {
+      this.sidebar.expandedSessions.add(this.sessionName);
+    }
+
+    for (const expanded of [...this.sidebar.expandedSessions]) {
+      if (!sessions.some((snapshot) => snapshot.name === expanded)) {
+        this.sidebar.expandedSessions.delete(expanded);
+      }
+    }
+
+    const items = this.getSidebarItems();
+    this.sidebar.selectedIndex = Math.max(0, Math.min(this.sidebar.selectedIndex, Math.max(0, items.length - 1)));
+  }
+
+  private handleSidebarInput(chunk: string): boolean {
+    switch (chunk) {
+      case "\u001b":
+        this.sidebar.focused = false;
+        this.render();
+        return true;
+      case "\u001b[A":
+      case "k":
+        this.moveSidebarSelection(-1);
+        return true;
+      case "\u001b[B":
+      case "j":
+        this.moveSidebarSelection(1);
+        return true;
+      case "\r":
+        void this.activateSidebarSelection();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private moveSidebarSelection(delta: number): void {
+    const items = this.getSidebarItems();
+    if (items.length === 0) {
+      return;
+    }
+    this.sidebar.selectedIndex =
+      (this.sidebar.selectedIndex + delta + items.length) % items.length;
+    this.render();
+  }
+
+  private async activateSidebarSelection(): Promise<void> {
+    const items = this.getSidebarItems();
+    const selected = items[this.sidebar.selectedIndex];
+    if (!selected) {
+      return;
+    }
+
+    if (selected.kind === "session") {
+      const switchingSessions = selected.sessionName !== this.sessionName;
+      this.sessionName = selected.sessionName;
+      if (switchingSessions || !selected.expanded) {
+        this.sidebar.expandedSessions.add(selected.sessionName);
+      } else {
+        this.sidebar.expandedSessions.delete(selected.sessionName);
+      }
+      this.ensureSidebarState();
+      await this.refreshWindowState();
+      return;
+    }
+
+    this.sessionName = selected.sessionName;
+    this.currentSession().selectWindow(selected.windowId);
+    this.sidebar.focused = false;
+    this.ensureSidebarState();
+    await this.refreshWindowState();
+  }
+
+  private toggleSidebar(): void {
+    this.ensureSidebarState();
+    if (this.sidebar.visible) {
+      this.sidebar.visible = false;
+      this.sidebar.focused = false;
+    } else {
+      this.sidebar.visible = true;
+      this.sidebar.focused = true;
+      const items = this.getSidebarItems();
+      const activeWindowId = this.currentSnapshot().activeWindowId;
+      const activeIndex =
+        items.findIndex(
+          (item) =>
+            item.kind === "window" &&
+            item.sessionName === this.sessionName &&
+            item.windowId === activeWindowId,
+        ) ??
+        -1;
+      this.sidebar.selectedIndex = Math.max(0, activeIndex);
+    }
+    this.syncPaneSizes();
     this.render();
   }
 }

@@ -3,6 +3,7 @@ import type { FocusDirection } from "../types.js";
 
 export type TuiAction =
   | { type: "detach" }
+  | { type: "toggle-sidebar" }
   | { type: "new-window" }
   | { type: "next-window" }
   | { type: "previous-window" }
@@ -75,6 +76,9 @@ export class KeyBindingHandler extends EventEmitter {
     }
 
     switch (chunk) {
+      case "b":
+        this.emit("action", { type: "toggle-sidebar" } satisfies TuiAction);
+        return;
       case "d":
         this.emit("action", { type: "detach" } satisfies TuiAction);
         return;

@@ -99,6 +99,15 @@ export interface TailRequest {
   stripAnsi?: boolean;
 }
 
+export interface ScreenshotRequest {
+  cmd: "screenshot";
+  session: string;
+  pane?: number;
+  tui?: boolean;
+  cols?: number;
+  rows?: number;
+}
+
 export interface WriteRequest {
   cmd: "write";
   session: string;
@@ -268,6 +277,7 @@ export type ApiRequest =
   | GetSessionRequest
   | ListRequest
   | TailRequest
+  | ScreenshotRequest
   | WriteRequest
   | KillRequest
   | ListWindowsRequest

@@ -229,6 +229,34 @@ export class AmuxServer {
           lines: pane.tail(request.lines ?? 20, request.stripAnsi ?? false),
         });
       }
+      case "screenshot": {
+        const session = this.manager.getSession(request.session);
+        const window = session.getWindow();
+
+        if (request.tui) {
+          const paneScreens = Object.fromEntries(
+            session
+              .listWindows()
+              .flatMap((candidateWindow) =>
+                candidateWindow.listPanes().map((pane) => [String(pane.id), pane.getScreenSnapshot()] as const),
+              ),
+          );
+          return success({
+            session: session.snapshot(),
+            sessions: this.manager.listSessions(),
+            paneScreens,
+            cols: request.cols,
+            rows: request.rows,
+          });
+        }
+
+        const pane = window.getPane(request.pane ?? window.activePaneIdValue ?? window.listPanes()[0]?.id ?? 0);
+        return success({
+          session: request.session,
+          pane: pane.id,
+          ...pane.getScreenSnapshot(),
+        });
+      }
       case "write": {
         const pane = this.manager
           .getSession(request.session)
