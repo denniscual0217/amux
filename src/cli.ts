@@ -29,6 +29,8 @@ function printUsage(): void {
       "  amux status                                   Show daemon & session status",
       "  amux stop                                     Stop the daemon",
       "  amux restart                                  Restart the daemon",
+      "  amux install                                  Install `amux` executable into a system bin directory",
+      "  amux uninstall                                Remove installed `amux` executable",
       "  amux new [name]                               New session in current directory (+ attach)",
       "  amux attach -t <session>                      Attach TUI to session",
       "  amux spawn -s <name> -e <cmd> [options]       Create session & run command",
@@ -259,6 +261,26 @@ async function main(): Promise<void> {
     await startServer(socketPath, streamPort);
     process.stdout.write(`amux listening on ${socketPath} and ws://127.0.0.1:${streamPort}\n`);
     return await new Promise(() => undefined);
+  }
+
+  if (command === "install" || command === "uninstall") {
+    const scriptName = command === "install" ? "install-bin.mjs" : "uninstall-bin.mjs";
+    const scriptPath = path.resolve(path.dirname(process.argv[1]), "..", "scripts", scriptName);
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, [scriptPath], {
+        stdio: "inherit",
+      });
+      child.once("error", reject);
+      child.once("exit", (code) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`amux ${command} failed with exit code ${code ?? 1}`));
+      });
+    });
+    return;
   }
 
   if (command === "stop") {

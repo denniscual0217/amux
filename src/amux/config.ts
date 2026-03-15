@@ -40,8 +40,14 @@ function getLoginShell(): string {
   // macOS: use dscl (Directory Services / Open Directory)
   if (platform() === 'darwin') {
     try {
-      const user = process.env['USER'] || execSync('whoami', { encoding: 'utf-8' }).trim();
-      const shell = execSync(`dscl . -read /Users/${user} UserShell`, { encoding: 'utf-8' }).trim();
+      const user = process.env['USER'] || execSync('whoami', {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      const shell = execSync(`dscl . -read /Users/${user} UserShell`, {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
       const match = shell.match(/UserShell:\s*(.+)/);
       if (match?.[1]) {
         return match[1].trim();

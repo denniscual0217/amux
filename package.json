@@ -10,6 +10,8 @@
     "build": "tsc",
     "start": "node dist/cli.js start",
     "dev": "tsc --watch",
+    "install:bin": "node scripts/install-bin.mjs",
+    "uninstall:bin": "node scripts/uninstall-bin.mjs",
     "smoke": "npm run build && node scripts/smoke-test.mjs",
     "test": "npm run build"
   },

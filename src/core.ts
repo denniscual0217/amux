@@ -1,6 +1,7 @@
 import http from "node:http";
 import https from "node:https";
 import os from "node:os";
+import path from "node:path";
 import process from "node:process";
 import { EventEmitter } from "node:events";
 import * as pty from "node-pty";
@@ -15,6 +16,7 @@ import type {
   SplitDirection,
   WindowSnapshot,
 } from "./types.js";
+import { loadConfig } from "./amux/config.js";
 
 const ANSI_PATTERN =
   // Matches common CSI/OSC/control-sequence patterns well enough for agent output cleanup.
@@ -311,6 +313,19 @@ function isInteractiveShellCommand(command: string, shell: string): boolean {
   return normalized === shell || normalized === `exec ${shell}`;
 }
 
+function shellSupportsLoginFlag(shell: string): boolean {
+  const name = path.basename(shell);
+  return ["sh", "bash", "zsh", "fish", "ksh", "mksh", "dash"].includes(name);
+}
+
+function getShellArgs(command: string, shell: string): string[] {
+  if (isInteractiveShellCommand(command, shell)) {
+    return shellSupportsLoginFlag(shell) ? ["-l"] : [];
+  }
+
+  return shellSupportsLoginFlag(shell) ? ["-l", "-c", command] : ["-c", command];
+}
+
 interface CellStyle {
   fgMode: number;
   fgColor: number;
@@ -469,8 +484,9 @@ export class Pane extends EventEmitter {
     this.onExitUrl = options.onExitUrl;
 
     const shell = options.shell ?? getDefaultShell();
-    const env = { ...process.env, ...options.env } as Record<string, string>;
-    const args = isInteractiveShellCommand(command, shell) ? [] : ["-lc", command];
+    const config = loadConfig();
+    const env = { ...process.env, ...config.defaultEnv, ...options.env } as Record<string, string>;
+    const args = getShellArgs(command, shell);
     this.screen = new HeadlessTerminal({
       cols: options.cols ?? 120,
       rows: options.rows ?? 30,
@@ -1113,6 +1129,5 @@ export class SessionManager {
 }
 
 export function getDefaultShell(): string {
-  const { loadConfig } = require("./amux/config.js") as typeof import("./amux/config.js");
   return loadConfig().defaultShell;
 }
