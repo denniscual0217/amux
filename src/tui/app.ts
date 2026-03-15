@@ -689,9 +689,11 @@ export class TuiApp {
         this.render();
         return true;
       case "\u001b[A":
+      case "k":
         this.moveSidebarSelection(-1);
         return true;
       case "\u001b[B":
+      case "j":
         this.moveSidebarSelection(1);
         return true;
       case "\r":
