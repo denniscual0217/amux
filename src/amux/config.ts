@@ -3,8 +3,9 @@
  * Config file lives at ~/.amux/config.json.
  */
 
+import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 
 export interface AmuxConfig {
@@ -27,10 +28,30 @@ export interface AmuxConfig {
 }
 
 /**
- * Get the user's login shell from /etc/passwd (like tmux does),
- * falling back to $SHELL, then /bin/sh.
+ * Get the user's login shell.
+ * 
+ * Detection order:
+ * 1. macOS: `dscl` (Directory Services) — /etc/passwd may not have all users
+ * 2. Linux/other: /etc/passwd by UID (same as tmux)
+ * 3. $SHELL environment variable
+ * 4. /bin/sh as final fallback
  */
 function getLoginShell(): string {
+  // macOS: use dscl (Directory Services / Open Directory)
+  if (platform() === 'darwin') {
+    try {
+      const user = process.env['USER'] || execSync('whoami', { encoding: 'utf-8' }).trim();
+      const shell = execSync(`dscl . -read /Users/${user} UserShell`, { encoding: 'utf-8' }).trim();
+      const match = shell.match(/UserShell:\s*(.+)/);
+      if (match?.[1]) {
+        return match[1].trim();
+      }
+    } catch {
+      // dscl not available or failed
+    }
+  }
+
+  // Linux/other: read /etc/passwd by UID
   try {
     const passwd = readFileSync('/etc/passwd', 'utf-8');
     const uid = process.getuid?.();
@@ -43,6 +64,7 @@ function getLoginShell(): string {
   } catch {
     // /etc/passwd not available (Windows, containers, etc.)
   }
+
   return process.env['SHELL'] || '/bin/sh';
 }
 
