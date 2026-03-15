@@ -1,10 +1,9 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { Terminal as HeadlessTerminal } from "@xterm/headless";
-import { CopyModeState } from "./tui/copypaste.js";
 import { TerminalRenderer, type SidebarItem } from "./tui/renderer.js";
-import { renderTerminalLine, type PaneScreenSnapshot } from "./core.js";
+import { type PaneScreenSnapshot } from "./core.js";
+import { buildStatusBar } from "./tui/statusbar.js";
 import type { SessionSnapshot } from "./types.js";
 
 const ESC = "\u001B";
@@ -17,6 +16,14 @@ const CELL_WIDTH = 8.4;
 const CELL_HEIGHT = 18;
 const FONT_FAMILY = "DejaVu Sans Mono, Menlo, Monaco, Consolas, Courier New, monospace";
 const BASELINE_OFFSET = 14;
+const SIDEBAR_BG = "#262626";
+const SIDEBAR_ACTIVE_BG = "#005f87";
+const SIDEBAR_ACTIVE_FG = "#ffffff";
+const SIDEBAR_WINDOW_ACTIVE_BG = "#3a3a3a";
+const SIDEBAR_WINDOW_ACTIVE_FG = "#5fd7ff";
+const SIDEBAR_SESSION_FG = "#e5e5e5";
+const SIDEBAR_WINDOW_FG = "#8a8a8a";
+const SIDEBAR_SEPARATOR_COLOR = "#444444";
 const STANDARD_COLORS = [
   "#000000",
   "#cd3131",
@@ -396,13 +403,19 @@ function resolveStyle(style: ParsedStyle): RenderedStyle {
   };
 }
 
-function renderCellDecorations(cell: StyledCell, row: number, style: RenderedStyle): string[] {
+function renderCellDecorations(
+  cell: StyledCell,
+  row: number,
+  style: RenderedStyle,
+  offsetX = 0,
+  offsetY = CHROME_HEIGHT,
+): string[] {
   const parts: string[] = [];
-  const x = cell.col * CELL_WIDTH;
+  const x = offsetX + cell.col * CELL_WIDTH;
   const width = cell.width * CELL_WIDTH;
   const lineStart = x + 0.8;
   const lineEnd = Math.max(lineStart, x + width - 0.8);
-  const textTop = CHROME_HEIGHT + row * CELL_HEIGHT;
+  const textTop = offsetY + row * CELL_HEIGHT;
 
   if (style.underline) {
     const y = textTop + CELL_HEIGHT - 3;
@@ -426,6 +439,68 @@ function renderCellDecorations(cell: StyledCell, row: number, style: RenderedSty
   }
 
   return parts;
+}
+
+interface RenderLayer {
+  backgrounds: string[];
+  text: string[];
+  decorations: string[];
+}
+
+function createRenderLayer(): RenderLayer {
+  return {
+    backgrounds: [],
+    text: [],
+    decorations: [],
+  };
+}
+
+function appendRenderedLine(
+  layer: RenderLayer,
+  line: string,
+  cols: number,
+  row: number,
+  offsetX = 0,
+  offsetY = CHROME_HEIGHT,
+): void {
+  const cells = parseAnsiLine(line, cols);
+  for (const cell of cells) {
+    const resolved = resolveStyle(cell.style);
+    const x = offsetX + cell.col * CELL_WIDTH;
+    const y = offsetY + row * CELL_HEIGHT;
+    const rectWidth = cell.width * CELL_WIDTH;
+
+    if (resolved.bg !== DEFAULT_BG) {
+      layer.backgrounds.push(
+        `<rect x="${x}" y="${y}" width="${rectWidth}" height="${CELL_HEIGHT}" fill="${resolved.bg}"/>`,
+      );
+    }
+
+    if (cell.char !== " " && !resolved.invisible) {
+      const attrs = [
+        `x="${x}"`,
+        `y="${y + BASELINE_OFFSET}"`,
+        `fill="${resolved.fg}"`,
+        `font-family="${escapeXml(FONT_FAMILY)}"`,
+        `font-size="14"`,
+        `xml:space="preserve"`,
+      ];
+
+      if (resolved.bold) {
+        attrs.push(`font-weight="700"`);
+      }
+      if (resolved.italic) {
+        attrs.push(`font-style="italic"`);
+      }
+      if (resolved.dim) {
+        attrs.push(`opacity="0.7"`);
+      }
+
+      layer.text.push(`<text ${attrs.join(" ")}>${escapeXml(cell.char)}</text>`);
+    }
+
+    layer.decorations.push(...renderCellDecorations(cell, row, resolved, offsetX, offsetY));
+  }
 }
 
 export function renderScreenshotSvg(snapshot: PaneScreenSnapshot, options: ScreenshotSvgOptions = {}): string {
@@ -547,24 +622,60 @@ function buildSidebarItems(session: SessionSnapshot, sessions: SessionSnapshot[]
   return items;
 }
 
-function snapshotFromTerminal(terminal: HeadlessTerminal): PaneScreenSnapshot {
-  const buffer = terminal.buffer.active;
-  const startLine = buffer.viewportY;
-  const lines: string[] = [];
-
-  for (let row = 0; row < terminal.rows; row += 1) {
-    lines.push(renderTerminalLine(startLine + row, terminal));
+function trimVisible(value: string, width: number): string {
+  if (width <= 0) {
+    return "";
   }
 
-  return {
-    lines,
-    cursor: {
-      row: Math.max(0, Math.min(terminal.rows - 1, buffer.cursorY)),
-      col: Math.max(0, Math.min(terminal.cols - 1, buffer.cursorX)),
-    },
-    rows: terminal.rows,
-    cols: terminal.cols,
-  };
+  const normalized = value.replace(/\t/g, "  ");
+  return normalized.length > width ? normalized.slice(0, width) : normalized.padEnd(width, " ");
+}
+
+function renderSidebarLabel(item: SidebarItem, width: number): string {
+  return item.kind === "session"
+    ? trimVisible(item.sessionName, width)
+    : trimVisible(`${item.windowId}: ${item.windowName}`, width);
+}
+
+function renderSessionChevron(expanded: boolean, row: number, fill: string): string {
+  const centerY = CHROME_HEIGHT + row * CELL_HEIGHT + CELL_HEIGHT / 2;
+  return expanded
+    ? `<polygon points="7,${centerY - 2} 13,${centerY - 2} 10,${centerY + 2}" fill="${fill}"/>`
+    : `<polygon points="8,${centerY - 3} 8,${centerY + 3} 12,${centerY}" fill="${fill}"/>`;
+}
+
+function renderSidebarRow(item: SidebarItem | undefined, row: number, widthCols: number): string {
+  const y = CHROME_HEIGHT + row * CELL_HEIGHT;
+  const width = widthCols * CELL_WIDTH;
+  const fill =
+    item?.kind === "session"
+      ? item.active
+        ? SIDEBAR_ACTIVE_BG
+        : SIDEBAR_BG
+      : item?.active
+        ? SIDEBAR_WINDOW_ACTIVE_BG
+        : SIDEBAR_BG;
+  const fg =
+    item?.kind === "session"
+      ? item.active
+        ? SIDEBAR_ACTIVE_FG
+        : SIDEBAR_SESSION_FG
+      : item?.active
+        ? SIDEBAR_WINDOW_ACTIVE_FG
+        : SIDEBAR_WINDOW_FG;
+  const weight = item?.kind === "session" ? ` font-weight="700"` : "";
+  const label = item ? renderSidebarLabel(item, widthCols) : "";
+  const textX = item ? 18 : 4;
+
+  return [
+    `<rect x="0" y="${y}" width="${width}" height="${CELL_HEIGHT}" fill="${fill ?? SIDEBAR_BG}"/>`,
+    ...(item?.kind === "session" ? [renderSessionChevron(item.expanded, row, fg)] : []),
+    ...(item
+      ? [
+          `<text x="${textX}" y="${y + BASELINE_OFFSET}" fill="${fg}" font-family="${escapeXml(FONT_FAMILY)}" font-size="14" xml:space="preserve"${weight}>${escapeXml(label)}</text>`,
+        ]
+      : []),
+  ].join("");
 }
 
 function writeSvgPng(svg: string, outputPath: string): string {
@@ -590,48 +701,94 @@ export async function renderTuiScreenshot(
   const rows = Math.max(2, options.rows ?? 30);
   const sidebarItems = buildSidebarItems(session, sessions);
   const current = currentWindow(session);
-  const sessionIndex = sidebarItems.findIndex((item) => item.kind === "session" && item.sessionName === session.name);
-  const frameRenderer = new TerminalRenderer();
-  frameRenderer.resize(cols, rows);
-  const frame = frameRenderer.render({
+  const width = cols * CELL_WIDTH;
+  const height = rows * CELL_HEIGHT + CHROME_HEIGHT;
+  const title = options.title ?? `${session.name}:${current.name}`;
+  const sidebarWidthCols = Math.min(TerminalRenderer.SIDEBAR_WIDTH, cols);
+  const sidebarWidth = sidebarWidthCols * CELL_WIDTH;
+  const bodyRows = Math.max(0, rows - 1);
+  const renderer = new TerminalRenderer();
+  renderer.resize(cols, rows);
+  const regions = renderer.getRegionsForState({
     session,
-    sessions,
-    paneBuffers: new Map(),
-    paneScreens,
-    copyMode: new CopyModeState(),
     sidebar: {
       visible: true,
       focused: false,
       width: TerminalRenderer.SIDEBAR_WIDTH,
       items: sidebarItems,
-      selectedIndex: Math.max(0, sessionIndex),
+      selectedIndex: 0,
     },
-    overlay: null,
-    message: null,
   });
+  const paneLayer = createRenderLayer();
+  const paneNodes: string[] = [];
 
-  const terminal = new HeadlessTerminal({
-    cols,
-    rows,
-    allowProposedApi: true,
-    scrollback: 0,
-  });
-  await new Promise<void>((resolve) => terminal.write(frame, resolve));
+  for (const region of regions) {
+    const regionX = (region.x - 1) * CELL_WIDTH;
+    const regionY = CHROME_HEIGHT + (region.y - 1) * CELL_HEIGHT;
+    const regionWidth = region.width * CELL_WIDTH;
+    const regionHeight = region.height * CELL_HEIGHT;
+    const innerWidthCols = Math.max(1, region.width - 2);
+    const innerHeightRows = Math.max(1, region.height - 2);
+    const pane = paneScreens.get(region.paneId);
+    const isActive = region.paneId === current.activePaneId;
+    const borderColor = isActive ? "#5fd7ff" : palette256Color(240);
 
-  const snapshot = snapshotFromTerminal(terminal);
-  return writeSvgPng(
-    renderScreenshotSvg(snapshot, {
-      title: options.title ?? `${session.name}:${current.name}`,
-      sidebar: {
-        widthCols: Math.max(0, TerminalRenderer.SIDEBAR_WIDTH - 1),
-        separatorCols: 1,
-        background: "#252526",
-        separatorColor: "#444444",
-        separatorWidth: 1.5,
-      },
-    }),
-    outputPath,
-  );
+    paneNodes.push(
+      `<rect x="${regionX}" y="${regionY}" width="${regionWidth}" height="${regionHeight}" fill="none" stroke="${borderColor}" stroke-width="1"/>`,
+    );
+    paneNodes.push(
+      `<text x="${regionX + 2 * CELL_WIDTH}" y="${regionY + BASELINE_OFFSET}" fill="${borderColor}" font-family="${escapeXml(FONT_FAMILY)}" font-size="14" xml:space="preserve">${escapeXml(trimVisible(` ${current.name}.${region.paneId} `, Math.max(0, innerWidthCols - 1)))}</text>`,
+    );
+
+    const lines = pane?.lines.slice(0, innerHeightRows) ?? [];
+    lines.forEach((line, index) => {
+      appendRenderedLine(
+        paneLayer,
+        line,
+        innerWidthCols,
+        index,
+        regionX + CELL_WIDTH,
+        regionY + CELL_HEIGHT,
+      );
+    });
+
+    if (isActive && pane) {
+      const cursorRow = Math.max(0, Math.min(innerHeightRows - 1, pane.cursor.row));
+      const cursorCol = Math.max(0, Math.min(innerWidthCols - 1, pane.cursor.col));
+      paneNodes.push(
+        `<rect x="${regionX + CELL_WIDTH + cursorCol * CELL_WIDTH}" y="${regionY + CELL_HEIGHT + cursorRow * CELL_HEIGHT}" width="${CELL_WIDTH}" height="${CELL_HEIGHT}" fill="#ffffff" opacity="0.9"/>`,
+      );
+    }
+  }
+
+  const statusLayer = createRenderLayer();
+  appendRenderedLine(statusLayer, buildStatusBar(session, cols), cols, 0, 0, CHROME_HEIGHT + (rows - 1) * CELL_HEIGHT);
+
+  const sidebarNodes = Array.from({ length: bodyRows }, (_, row) => renderSidebarRow(sidebarItems[row], row, sidebarWidthCols));
+
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    `<rect x="0" y="0" width="${width}" height="${height}" rx="10" ry="10" fill="${DEFAULT_BG}"/>`,
+    `<rect x="0" y="0" width="${width}" height="${CHROME_HEIGHT}" rx="10" ry="10" fill="${CHROME_BG}"/>`,
+    `<rect x="0" y="${CHROME_HEIGHT - 10}" width="${width}" height="10" fill="${CHROME_BG}"/>`,
+    `<circle cx="16" cy="15" r="5" fill="#ff5f57"/>`,
+    `<circle cx="32" cy="15" r="5" fill="#febc2e"/>`,
+    `<circle cx="48" cy="15" r="5" fill="#28c840"/>`,
+    `<text x="${width / 2}" y="19" text-anchor="middle" fill="#444444" font-family="${escapeXml(FONT_FAMILY)}" font-size="12">${escapeXml(title)}</text>`,
+    `<rect x="0" y="${CHROME_HEIGHT}" width="${sidebarWidth}" height="${bodyRows * CELL_HEIGHT}" fill="${SIDEBAR_BG}"/>`,
+    ...sidebarNodes,
+    `<line x1="${sidebarWidth}" y1="${CHROME_HEIGHT}" x2="${sidebarWidth}" y2="${CHROME_HEIGHT + bodyRows * CELL_HEIGHT}" stroke="${SIDEBAR_SEPARATOR_COLOR}" stroke-width="1"/>`,
+    ...paneNodes,
+    ...paneLayer.backgrounds,
+    ...paneLayer.text,
+    ...paneLayer.decorations,
+    ...statusLayer.backgrounds,
+    ...statusLayer.text,
+    ...statusLayer.decorations,
+    `</svg>`,
+  ].join("");
+
+  return writeSvgPng(svg, outputPath);
 }
 
 export function writeScreenshotPng(
