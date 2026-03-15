@@ -26,6 +26,26 @@ export interface AmuxConfig {
   prefixKey: string;
 }
 
+/**
+ * Get the user's login shell from /etc/passwd (like tmux does),
+ * falling back to $SHELL, then /bin/sh.
+ */
+function getLoginShell(): string {
+  try {
+    const passwd = readFileSync('/etc/passwd', 'utf-8');
+    const uid = process.getuid?.();
+    for (const line of passwd.split('\n')) {
+      const fields = line.split(':');
+      if (fields.length >= 7 && uid !== undefined && fields[2] === String(uid)) {
+        return fields[6] || process.env['SHELL'] || '/bin/sh';
+      }
+    }
+  } catch {
+    // /etc/passwd not available (Windows, containers, etc.)
+  }
+  return process.env['SHELL'] || '/bin/sh';
+}
+
 const CONFIG_DIR = join(homedir(), '.amux');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
@@ -36,7 +56,7 @@ function getDefaults(): AmuxConfig {
     recordingEnabled: false,
     recordingsDir: join(homedir(), '.amux', 'recordings'),
     retentionDays: 30,
-    defaultShell: process.env['SHELL'] || '/bin/sh',
+    defaultShell: getLoginShell(),
     defaultEnv: {},
     prefixKey: "C-b",
   };
