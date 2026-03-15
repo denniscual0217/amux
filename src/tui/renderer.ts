@@ -198,8 +198,9 @@ export class TerminalRenderer {
     if (sidebarWidth > 0) {
       const contentWidth = Math.max(0, sidebarWidth - 1);
       const rows = Math.max(1, this.height - 1);
+      const sidebarBg = "\u001B[48;5;235m";
       for (let row = 1; row <= rows; row += 1) {
-        screen.push(`${move(row, 1)}${" ".repeat(contentWidth)}`);
+        screen.push(`${move(row, 1)}${sidebarBg}${" ".repeat(contentWidth)}\u001B[0m`);
         const item = state.sidebar.items[row - 1];
         if (item) {
           const label = renderSidebarItemLabel(item, contentWidth);
@@ -207,13 +208,13 @@ export class TerminalRenderer {
           const style =
             item.kind === "session"
               ? item.active
-                ? "\u001B[1;7m"
+                ? "\u001B[1;37;48;5;24m"
                 : "\u001B[1m"
               : item.active
-                ? "\u001B[38;5;81m\u001B[7m"
+                ? "\u001B[38;5;81m\u001B[48;5;237m"
                 : "\u001B[38;5;246m";
           const focusStyle = selected && state.sidebar.focused ? "\u001B[48;5;238m" : "";
-          screen.push(`${move(row, 1)}${focusStyle}${style}${label}\u001B[0m`);
+          screen.push(`${move(row, 1)}${sidebarBg}${focusStyle}${style}${label}\u001B[0m`);
         }
         screen.push(`${move(row, sidebarWidth)}\u001B[38;5;240m│\u001B[0m`);
       }

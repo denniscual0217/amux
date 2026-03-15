@@ -15,7 +15,7 @@ const CHROME_BG = "#d4d4d4";
 const CHROME_HEIGHT = 30;
 const CELL_WIDTH = 8.4;
 const CELL_HEIGHT = 18;
-const FONT_FAMILY = "Menlo, Monaco, Consolas, Courier New, monospace";
+const FONT_FAMILY = "DejaVu Sans Mono, Menlo, Monaco, Consolas, Courier New, monospace";
 const BASELINE_OFFSET = 14;
 const STANDARD_COLORS = [
   "#000000",
