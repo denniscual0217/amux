@@ -468,7 +468,7 @@ export class Pane extends EventEmitter {
     this.cwd = options.cwd;
     this.onExitUrl = options.onExitUrl;
 
-    const shell = options.shell ?? process.env.SHELL ?? "/bin/sh";
+    const shell = options.shell ?? getDefaultShell();
     const env = { ...process.env, ...options.env } as Record<string, string>;
     const args = isInteractiveShellCommand(command, shell) ? [] : ["-lc", command];
     this.screen = new HeadlessTerminal({
@@ -1113,5 +1113,6 @@ export class SessionManager {
 }
 
 export function getDefaultShell(): string {
-  return process.env.SHELL ?? (os.platform() === "win32" ? "powershell.exe" : "/bin/sh");
+  const { loadConfig } = require("./amux/config.js") as typeof import("./amux/config.js");
+  return loadConfig().defaultShell;
 }
