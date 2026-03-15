@@ -29,6 +29,7 @@ function printUsage(): void {
       "  amux status                                   Show daemon & session status",
       "  amux stop                                     Stop the daemon",
       "  amux restart                                  Restart the daemon",
+      "  amux new [name]                               New session in current directory (+ attach)",
       "  amux attach -t <session>                      Attach TUI to session",
       "  amux spawn -s <name> -e <cmd> [options]       Create session & run command",
       "      --cwd <dir>                               Working directory",
@@ -343,6 +344,23 @@ async function main(): Promise<void> {
   let response: unknown;
 
   switch (command) {
+    case "new": {
+      const name = args.shift() || `s${Date.now() % 10000}`;
+      const cwd = process.cwd();
+      response = await send({
+        cmd: "spawn",
+        session: name,
+        exec: getDefaultShell(),
+        cwd,
+      });
+      // Auto-attach if running in a TTY
+      if (process.stdout.isTTY) {
+        console.log(JSON.stringify(response, null, 2));
+        await attachSession(name);
+        return;
+      }
+      break;
+    }
     case "spawn": {
       const session = takeOption(args, ["-s", "--session"]);
       const exec = takeOption(args, ["-e", "--exec"]);
