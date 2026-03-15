@@ -42,11 +42,11 @@ function decodePrefix(prefix: string): string {
 
 export class KeyBindingHandler extends EventEmitter {
   private awaitingPrefix = false;
-  private readonly prefix: string;
+  private readonly prefixes: Set<string>;
 
   public constructor(options: KeyBindingOptions = {}) {
     super();
-    this.prefix = decodePrefix(options.prefix ?? "C-b");
+    this.prefixes = new Set([decodePrefix(options.prefix ?? "C-b"), decodePrefix("C-a")]);
   }
 
   public feed(chunk: string, copyMode = false): void {
@@ -61,7 +61,7 @@ export class KeyBindingHandler extends EventEmitter {
       return;
     }
 
-    if (chunk === this.prefix) {
+    if (this.prefixes.has(chunk)) {
       this.awaitingPrefix = true;
       return;
     }
@@ -104,9 +104,11 @@ export class KeyBindingHandler extends EventEmitter {
         this.emit("action", { type: "move-focus", direction: "right" } satisfies TuiAction);
         return;
       case '"':
+      case "-":
         this.emit("action", { type: "split", direction: "horizontal" } satisfies TuiAction);
         return;
       case "%":
+      case "_":
         this.emit("action", { type: "split", direction: "vertical" } satisfies TuiAction);
         return;
       case "x":
