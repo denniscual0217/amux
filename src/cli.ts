@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import net from "node:net";
+import path from "node:path";
 import process from "node:process";
 import { WebSocket } from "ws";
 import { getDefaultShell } from "./core.js";
+import { writeScreenshotPng } from "./screenshot.js";
 import { getSocketPath, getStreamPortFromConfig, startServer } from "./server.js";
 import { ApiRequest, ApiResponse, SessionSnapshot, StreamMessage } from "./types.js";
+import type { PaneScreenSnapshot } from "./core.js";
 
 function printUsage(): void {
   console.log(
@@ -24,6 +27,7 @@ function printUsage(): void {
       "      --input <text>                             Send input after spawn",
       "  amux list                                     List all sessions",
       "  amux tail <session> [--lines N] [--strip-ansi] Get pane output",
+      "  amux screenshot <session> [-p <pane>] [-o <output.png>] Capture pane screen as PNG",
       "  amux stream <session> [--pane N]              Live stream pane output",
       "  amux write <session> <data>                   Send input to session",
       "  amux kill <session>                           Kill a session",
@@ -55,6 +59,16 @@ function takeFlag(args: string[], name: string): boolean {
 
   args.splice(index, 1);
   return true;
+}
+
+function sanitizeFileSegment(value: string): string {
+  const sanitized = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return sanitized.length > 0 ? sanitized : "session";
+}
+
+function defaultScreenshotPath(session: string): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return path.resolve(process.cwd(), `screenshot-${sanitizeFileSegment(session)}-${timestamp}.png`);
 }
 
 async function send<T = unknown>(request: ApiRequest): Promise<T> {
@@ -323,6 +337,30 @@ async function main(): Promise<void> {
         stripAnsi,
       });
       break;
+    }
+    case "screenshot": {
+      const session = args.shift();
+      if (!session) {
+        throw new Error("screenshot requires <session>");
+      }
+
+      const paneValue = takeOption(args, ["-p", "--pane"]);
+      const output = takeOption(args, ["-o", "--output"]) ?? defaultScreenshotPath(session);
+      const pane = paneValue === undefined ? undefined : Number.parseInt(paneValue, 10);
+      if (paneValue !== undefined && Number.isNaN(pane)) {
+        throw new Error("--pane must be a number");
+      }
+
+      const snapshot = await send<PaneScreenSnapshot>({
+        cmd: "screenshot",
+        session,
+        pane,
+      });
+      const writtenPath = writeScreenshotPng(snapshot, output, {
+        title: pane === undefined ? session : `${session} pane ${pane}`,
+      });
+      process.stdout.write(`${writtenPath}\n`);
+      return;
     }
     case "write": {
       const session = args.shift();
