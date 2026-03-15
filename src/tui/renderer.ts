@@ -21,11 +21,38 @@ export interface OverlayState {
   selectedIndex: number;
 }
 
+export interface SidebarWindowItem {
+  kind: "window";
+  sessionName: string;
+  windowId: number;
+  windowName: string;
+  active: boolean;
+}
+
+export interface SidebarSessionItem {
+  kind: "session";
+  sessionName: string;
+  expanded: boolean;
+  active: boolean;
+}
+
+export type SidebarItem = SidebarSessionItem | SidebarWindowItem;
+
+export interface SidebarState {
+  visible: boolean;
+  focused: boolean;
+  width: number;
+  items: SidebarItem[];
+  selectedIndex: number;
+}
+
 export interface RenderState {
   session: SessionSnapshot;
+  sessions: SessionSnapshot[];
   paneBuffers: Map<number, PaneBuffer>;
   paneScreens: Map<number, PaneScreenSnapshot>;
   copyMode: CopyModeState;
+  sidebar: SidebarState;
   overlay?: OverlayState | null;
   message?: string | null;
 }
@@ -100,10 +127,19 @@ function currentWindow(session: SessionSnapshot): WindowSnapshot {
   );
 }
 
+function renderSidebarItemLabel(item: SidebarItem, width: number): string {
+  if (item.kind === "session") {
+    return trimVisible(`${item.expanded ? "▾" : "▸"} ${item.sessionName}`, width);
+  }
+
+  return trimVisible(`    ${item.windowId}: ${item.windowName}`, width);
+}
+
 export class TerminalRenderer {
   private width = 80;
   private height = 24;
   private lastState: RenderState | null = null;
+  public static readonly SIDEBAR_WIDTH = 25;
 
   public enterAlternateScreen(): string {
     return "\u001B[?1049h\u001B[?25l";
@@ -120,25 +156,33 @@ export class TerminalRenderer {
   }
 
   public getRegions(session?: SessionSnapshot | null): PaneRegion[] {
-    if (!session) {
+    return this.getRegionsForState(this.lastState, session);
+  }
+
+  public getRegionsForState(state?: Pick<RenderState, "session" | "sidebar"> | null, session?: SessionSnapshot | null): PaneRegion[] {
+    const targetSession = session ?? state?.session;
+    if (!targetSession) {
       return [];
     }
 
-    const window = currentWindow(session);
+    const window = currentWindow(targetSession);
+    const sidebarWidth = state?.sidebar.visible ? Math.min(state.sidebar.width, Math.max(0, this.width - 1)) : 0;
+    const paneX = 1 + sidebarWidth;
+    const paneWidth = Math.max(1, this.width - sidebarWidth);
     if (window.zoomedPaneId !== null) {
       return [
         {
           paneId: window.zoomedPaneId,
-          x: 1,
+          x: paneX,
           y: 1,
-          width: this.width,
+          width: paneWidth,
           height: Math.max(1, this.height - 1),
         },
       ];
     }
 
     const regions: PaneRegion[] = [];
-    computeRegions(window.layout, 1, 1, this.width, Math.max(1, this.height - 1), regions);
+    computeRegions(window.layout, paneX, 1, paneWidth, Math.max(1, this.height - 1), regions);
     return regions;
   }
 
@@ -147,8 +191,33 @@ export class TerminalRenderer {
 
     const window = currentWindow(state.session);
     const statusRow = Math.max(1, this.height);
-    const regions = this.getRegions(state.session);
+    const regions = this.getRegionsForState(state);
     const screen: string[] = ["\u001B[?25l\u001B[0m\u001B[H"];
+    const sidebarWidth = state.sidebar.visible ? Math.min(state.sidebar.width, Math.max(0, this.width - 1)) : 0;
+
+    if (sidebarWidth > 0) {
+      const contentWidth = Math.max(0, sidebarWidth - 1);
+      const rows = Math.max(1, this.height - 1);
+      for (let row = 1; row <= rows; row += 1) {
+        screen.push(`${move(row, 1)}${" ".repeat(contentWidth)}`);
+        const item = state.sidebar.items[row - 1];
+        if (item) {
+          const label = renderSidebarItemLabel(item, contentWidth);
+          const selected = row - 1 === state.sidebar.selectedIndex;
+          const style =
+            item.kind === "session"
+              ? item.active
+                ? "\u001B[1;7m"
+                : "\u001B[1m"
+              : item.active
+                ? "\u001B[38;5;81m\u001B[7m"
+                : "\u001B[38;5;246m";
+          const focusStyle = selected && state.sidebar.focused ? "\u001B[48;5;238m" : "";
+          screen.push(`${move(row, 1)}${focusStyle}${style}${label}\u001B[0m`);
+        }
+        screen.push(`${move(row, sidebarWidth)}\u001B[38;5;240m│\u001B[0m`);
+      }
+    }
 
     for (const region of regions) {
       const isActive = region.paneId === window.activePaneId;
