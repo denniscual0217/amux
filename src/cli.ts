@@ -25,7 +25,7 @@ function printUsage(): void {
       "amux — Agent-Native Terminal Multiplexer\n",
       "Usage:",
       "  amux                                          Launch TUI (auto-start daemon)",
-      "  amux start                                    Start daemon in foreground",
+      "  amux start [-d|--daemon]                      Start daemon (foreground, or -d for background)",
       "  amux status                                   Show daemon & session status",
       "  amux stop                                     Stop the daemon",
       "  amux restart                                  Restart the daemon",
@@ -226,6 +226,33 @@ async function main(): Promise<void> {
   }
 
   if (command === "start") {
+    const isDaemon = args.includes("-d") || args.includes("--daemon");
+
+    if (isDaemon) {
+      // Spawn detached background process
+      const cliPath = process.argv[1];
+      const child = spawn(process.execPath, [cliPath, "start"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      child.unref();
+
+      // Wait for socket to appear
+      const socketPath = getSocketPath();
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        try {
+          await send({ cmd: "list" });
+          console.log(`amux daemon started (pid ${child.pid})`);
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 200));
+        }
+      }
+      console.error("amux daemon failed to start");
+      process.exit(1);
+    }
+
     const socketPath = getSocketPath();
     const streamPort = getStreamPortFromConfig();
     await startServer(socketPath, streamPort);

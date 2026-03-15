@@ -52,6 +52,7 @@ amux stop
 | Command | Description |
 |---------|-------------|
 | `amux start` | Start the daemon (foreground) |
+| `amux start -d` | Start the daemon (background) |
 | `amux stop` | Stop the daemon |
 | `amux restart` | Restart the daemon (background) |
 | `amux status` | Show daemon + session status |
@@ -265,6 +266,38 @@ setInterval(() => {
     stripAnsi: true
   }) + '\n');
 }, 5000);
+```
+
+## Installation
+
+```bash
+cd /path/to/amux
+npm install
+npm run build
+npm link
+```
+
+### Persisting `amux` in new terminal windows
+
+`npm link` installs `amux` into your Node.js global bin directory. If new terminal windows can't find `amux`, add the global bin to your shell profile:
+
+```bash
+# Find your global bin path
+npm bin -g
+
+# Add to your shell profile (~/.zshrc, ~/.bashrc, etc.)
+export PATH="$(npm bin -g):$PATH"
+```
+
+**If using nvm**, the path changes per Node version. Add this to `~/.zshrc` instead:
+```bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+```
+
+Alternatively, create a permanent symlink:
+```bash
+sudo ln -sf $(which amux) /usr/local/bin/amux
 ```
 
 ## Requirements
