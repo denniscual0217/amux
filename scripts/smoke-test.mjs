@@ -24,3 +24,25 @@ if (!lines.some((line) => line.includes("hello"))) {
 }
 
 console.log(JSON.stringify({ session: sessionName, lines, exitCode: pane.exitCode }, null, 2));
+
+const interactiveSessionName = `smoke-input-${Date.now()}`;
+const { pane: interactivePane } = manager.spawnInSession(interactiveSessionName, {
+  command: "bash",
+});
+
+interactivePane.write("echo interactive hello\n");
+
+const interactiveDeadline = Date.now() + 3000;
+
+while (Date.now() < interactiveDeadline) {
+  const interactiveLines = interactivePane.tail(20, true);
+  if (interactiveLines.some((line) => line.includes("interactive hello"))) {
+    console.log(JSON.stringify({ session: interactiveSessionName, lines: interactiveLines }, null, 2));
+    process.exit(0);
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+
+console.error(`Interactive smoke test failed. Output: ${JSON.stringify(interactivePane.tail(20, true))}`);
+process.exit(1);

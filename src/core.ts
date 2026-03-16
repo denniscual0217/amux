@@ -428,6 +428,12 @@ function cellStyle(cell: IBufferCell): CellStyle {
   };
 }
 
+function normalizePtyInput(data: string): string {
+  // PTYs generally expect carriage return for an Enter keypress.
+  // Convert bare line feeds so agent writes behave like a human pressing Enter.
+  return data.replace(/\r?\n/g, "\r");
+}
+
 export function renderTerminalLine(lineIndex: number, terminal: HeadlessTerminal): string {
   const line = terminal.buffer.active.getLine(lineIndex);
   if (!line) {
@@ -462,6 +468,8 @@ export class Pane extends EventEmitter {
   private readonly screen: HeadlessTerminal;
   private readonly outputLines: string[] = [];
   private partialLine = "";
+  private pendingInitialInput: string | null = null;
+  private initialInputTimer: NodeJS.Timeout | null = null;
   private readonly startedAtDate = new Date();
   private endedAtDate: Date | null = null;
   private exitCodeValue: number | null = null;
@@ -506,9 +514,11 @@ export class Pane extends EventEmitter {
       this.screen.write(chunk, () => {
         this.emit("data", { chunk } satisfies PaneDataEvent);
       });
+      this.scheduleInitialInputFlush();
     });
 
     this.terminal.onExit(({ exitCode }) => {
+      this.clearInitialInputTimer();
       this.flushPartialLine();
       this.exitCodeValue = exitCode;
       this.endedAtDate = new Date();
@@ -520,7 +530,8 @@ export class Pane extends EventEmitter {
     });
 
     if (options.input) {
-      this.write(options.input.endsWith("\n") ? options.input : `${options.input}\n`);
+      this.pendingInitialInput = options.input.endsWith("\n") ? options.input : `${options.input}\n`;
+      this.scheduleInitialInputFlush();
     }
   }
 
@@ -558,7 +569,7 @@ export class Pane extends EventEmitter {
   }
 
   public write(data: string): void {
-    this.terminal.write(data);
+    this.terminal.write(normalizePtyInput(data));
   }
 
   public resize(cols: number, rows: number): void {
@@ -593,6 +604,29 @@ export class Pane extends EventEmitter {
     }
 
     return shouldStripAnsi ? visibleLines.map((line) => stripAnsi(line)) : visibleLines;
+  }
+
+  private scheduleInitialInputFlush(): void {
+    if (!this.pendingInitialInput) {
+      return;
+    }
+
+    this.clearInitialInputTimer();
+    this.initialInputTimer = setTimeout(() => {
+      const data = this.pendingInitialInput;
+      this.pendingInitialInput = null;
+      this.initialInputTimer = null;
+      if (data) {
+        this.write(data);
+      }
+    }, 500);
+  }
+
+  private clearInitialInputTimer(): void {
+    if (this.initialInputTimer) {
+      clearTimeout(this.initialInputTimer);
+      this.initialInputTimer = null;
+    }
   }
 
   public snapshot(): PaneSnapshot {
