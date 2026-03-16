@@ -619,7 +619,7 @@ export class Pane extends EventEmitter {
       if (data) {
         this.write(data);
       }
-    }, 500);
+    }, 5000);
   }
 
   private clearInitialInputTimer(): void {
