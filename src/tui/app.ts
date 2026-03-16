@@ -337,16 +337,17 @@ export class TuiApp {
     if (reviveIfAllExited) {
       window.createSessionBoundPane(this.sessionName, {
         command: `exec ${getDefaultShell()}`,
+        cwd: this.currentSession().cwd,
       });
     }
   }
 
   private async handlePaneExit(): Promise<void> {
-    const sessionName = this.sessionName;
     const session = this.currentSession();
     const window = this.currentWindow();
     const panes = window.listPanes();
 
+    // Some panes still running in this window — just clean up exited ones.
     if (panes.some((pane) => pane.running)) {
       this.normalizeWindowPanes(false);
       this.seedBuffers();
@@ -356,7 +357,19 @@ export class TuiApp {
       return;
     }
 
-    this.manager.destroySession(sessionName);
+    // All panes in this window exited. Destroy only this window.
+    session.destroyWindow(window.name);
+
+    // If the session still has other windows, switch to one.
+    const remainingWindows = session.listWindows();
+    if (remainingWindows.length > 0) {
+      this.ensureSidebarState();
+      await this.refreshWindowState();
+      return;
+    }
+
+    // Session has no windows left — destroy it and move to next session.
+    this.manager.destroySession(session.name);
     const remaining = this.manager.listSessions();
     if (remaining.length === 0) {
       this.stop();
@@ -404,6 +417,7 @@ export class TuiApp {
       case "new-window":
         this.manager.createWindow(this.sessionName, {
           command: `exec ${getDefaultShell()}`,
+          cwd: this.currentSession().cwd,
         });
         this.sidebar.expandedSessions.add(this.sessionName);
         await this.refreshWindowState();
@@ -430,6 +444,7 @@ export class TuiApp {
       case "split":
         this.manager.splitPane(this.sessionName, action.direction, {
           command: `exec ${getDefaultShell()}`,
+          cwd: session.cwd,
           windowName: window.name,
         });
         await this.refreshWindowState();

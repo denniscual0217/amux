@@ -897,6 +897,7 @@ export class Session {
   private activeWindowName: string | null = null;
   private nameValue: string;
   public readonly tags: Record<string, string>;
+  public cwd?: string;
 
   public constructor(name: string, tags?: Record<string, string>) {
     this.nameValue = name;
@@ -1112,6 +1113,7 @@ export class SessionManager {
     options: SpawnOptions & { windowName?: string },
   ): { session: Session; window: Window; pane: Pane } {
     const session = this.getOrCreateSession(sessionName);
+    session.cwd ??= options.cwd;
     const windowName = options.windowName ?? "main";
     const window =
       session.listWindows().find((candidate) => candidate.name === windowName) ??
@@ -1129,6 +1131,7 @@ export class SessionManager {
     options: SpawnOptions & { windowName?: string },
   ): { session: Session; window: Window; pane: Pane } {
     const session = this.getOrCreateSession(sessionName);
+    session.cwd ??= options.cwd;
     const window = session.listWindows()[0] ?? session.createWindow(options.windowName ?? "main");
     const pane =
       window.listPanes()[0] ??

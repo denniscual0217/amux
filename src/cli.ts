@@ -177,6 +177,7 @@ async function handleDefaultAttach(): Promise<void> {
       session: "main",
       window: "main",
       exec: `exec ${getDefaultShell()}`,
+      cwd: process.cwd(),
     });
     await attachSession(created.session.name);
     return;
