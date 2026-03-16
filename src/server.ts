@@ -263,8 +263,9 @@ export class AmuxServer {
         const session = this.manager.getSession(request.session);
         const window = resolveWindow(session, request.window);
         const pane = window.getPane(request.pane ?? window.activePaneIdValue ?? 0);
-        pane.write(request.data);
-        return success({ session: request.session, pane: pane.id, written: request.data.length });
+        const data = request.enter ? `${request.data}\n` : request.data;
+        pane.write(data);
+        return success({ session: request.session, pane: pane.id, written: data.length, entered: request.enter ?? false });
       }
       case "kill": {
         const removed = this.manager.destroySession(request.session);

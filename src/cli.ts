@@ -41,7 +41,7 @@ function printUsage(): void {
       "  amux tail <session> [--lines N] [--strip-ansi] Get pane output",
       "  amux screenshot <session> [--tui] [-p <pane>] [-o <output.png>] [--cols N] [--rows N] Capture pane screen as PNG",
       "  amux stream <session> [--pane N]              Live stream pane output",
-      "  amux write <session> <data>                   Send input to session",
+      "  amux write <session> <data> [--enter]          Send input to session (--enter to auto-submit)",
       "  amux kill <session>                           Kill a session",
       "  amux help                                     Show this help",
     ].join("\n"),
@@ -473,11 +473,12 @@ async function main(): Promise<void> {
     case "write": {
       const session = args.shift();
       const data = args.shift();
+      const enter = takeFlag(args, "--enter");
       if (!session || data === undefined) {
         throw new Error("write requires <session> <data>");
       }
 
-      response = await send({ cmd: "write", session, data });
+      response = await send({ cmd: "write", session, data, enter });
       break;
     }
     case "kill": {

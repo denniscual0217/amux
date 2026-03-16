@@ -114,6 +114,7 @@ export interface WriteRequest {
   data: string;
   pane?: number;
   window?: string;
+  enter?: boolean;
 }
 
 export interface KillRequest {
