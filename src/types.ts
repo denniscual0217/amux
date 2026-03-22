@@ -114,7 +114,14 @@ export interface WriteRequest {
   data: string;
   pane?: number;
   window?: string;
-  enter?: boolean;
+}
+
+export interface SendKeysRequest {
+  cmd: "send-keys";
+  session: string;
+  keys: string[];
+  pane?: number;
+  window?: string;
 }
 
 export interface KillRequest {
@@ -280,6 +287,7 @@ export type ApiRequest =
   | TailRequest
   | ScreenshotRequest
   | WriteRequest
+  | SendKeysRequest
   | KillRequest
   | ListWindowsRequest
   | ListPanesRequest

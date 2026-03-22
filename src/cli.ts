@@ -41,7 +41,8 @@ function printUsage(): void {
       "  amux tail <session> [--lines N] [--strip-ansi] Get pane output",
       "  amux screenshot <session> [--tui] [-p <pane>] [-o <output.png>] [--cols N] [--rows N] Capture pane screen as PNG",
       "  amux stream <session> [--pane N]              Live stream pane output",
-      "  amux write <session> <data> [--enter]          Send input to session (--enter to auto-submit)",
+      "  amux write <session> <data>                     Send text input to session",
+      "  amux send-keys <session> <key> [<key>...]       Send keypresses (Enter, C-c, Escape, Tab, Space, ...)",
       "  amux kill <session>                           Kill a session",
       "  amux help                                     Show this help",
     ].join("\n"),
@@ -474,12 +475,24 @@ async function main(): Promise<void> {
     case "write": {
       const session = args.shift();
       const data = args.shift();
-      const enter = takeFlag(args, "--enter");
       if (!session || data === undefined) {
         throw new Error("write requires <session> <data>");
       }
 
-      response = await send({ cmd: "write", session, data, enter });
+      response = await send({ cmd: "write", session, data });
+      break;
+    }
+    case "send-keys": {
+      const session = args.shift();
+      if (!session) {
+        throw new Error("send-keys requires <session> <key> [<key>...]");
+      }
+      const keys = args.splice(0);
+      if (keys.length === 0) {
+        throw new Error("send-keys requires at least one key");
+      }
+
+      response = await send({ cmd: "send-keys", session, keys });
       break;
     }
     case "kill": {

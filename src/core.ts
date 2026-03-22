@@ -469,7 +469,6 @@ export class Pane extends EventEmitter {
   private readonly outputLines: string[] = [];
   private partialLine = "";
   private pendingInitialInput: string | null = null;
-  private initialInputTimer: NodeJS.Timeout | null = null;
   private readonly startedAtDate = new Date();
   private endedAtDate: Date | null = null;
   private exitCodeValue: number | null = null;
@@ -514,11 +513,10 @@ export class Pane extends EventEmitter {
       this.screen.write(chunk, () => {
         this.emit("data", { chunk } satisfies PaneDataEvent);
       });
-      this.scheduleInitialInputFlush();
+      this.flushInitialInput();
     });
 
     this.terminal.onExit(({ exitCode }) => {
-      this.clearInitialInputTimer();
       this.flushPartialLine();
       this.exitCodeValue = exitCode;
       this.endedAtDate = new Date();
@@ -531,7 +529,6 @@ export class Pane extends EventEmitter {
 
     if (options.input) {
       this.pendingInitialInput = options.input.endsWith("\n") ? options.input : `${options.input}\n`;
-      this.scheduleInitialInputFlush();
     }
   }
 
@@ -568,8 +565,27 @@ export class Pane extends EventEmitter {
     return this.startedAtDate;
   }
 
+  private static readonly KEY_MAP: Record<string, string> = {
+    Enter: "\r",
+    "C-c": "\x03",
+    "C-d": "\x04",
+    "C-z": "\x1a",
+    Escape: "\x1b",
+    Esc: "\x1b",
+    Tab: "\t",
+    Space: " ",
+  };
+
   public write(data: string): void {
     this.terminal.write(normalizePtyInput(data));
+  }
+
+  public sendKey(key: string): void {
+    const sequence = Pane.KEY_MAP[key] ?? (key.length === 1 ? key : undefined);
+    if (sequence === undefined) {
+      throw new Error(`Unknown key: ${key}`);
+    }
+    this.terminal.write(sequence);
   }
 
   public resize(cols: number, rows: number): void {
@@ -606,27 +622,17 @@ export class Pane extends EventEmitter {
     return shouldStripAnsi ? visibleLines.map((line) => stripAnsi(line)) : visibleLines;
   }
 
-  private scheduleInitialInputFlush(): void {
+  private flushInitialInput(): void {
     if (!this.pendingInitialInput) {
       return;
     }
-
-    this.clearInitialInputTimer();
-    this.initialInputTimer = setTimeout(() => {
-      const data = this.pendingInitialInput;
-      this.pendingInitialInput = null;
-      this.initialInputTimer = null;
-      if (data) {
-        this.write(data);
-      }
-    }, 5000);
-  }
-
-  private clearInitialInputTimer(): void {
-    if (this.initialInputTimer) {
-      clearTimeout(this.initialInputTimer);
-      this.initialInputTimer = null;
-    }
+    const data = this.pendingInitialInput;
+    this.pendingInitialInput = null;
+    // Write text via pane.write() (bracketed paste safe), then send Enter
+    // directly to the PTY so TUI apps treat it as a keypress, not pasted text.
+    const text = data.replace(/\n$/, "");
+    this.write(text);
+    this.terminal.write("\r");
   }
 
   public snapshot(): PaneSnapshot {

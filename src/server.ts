@@ -263,9 +263,17 @@ export class AmuxServer {
         const session = this.manager.getSession(request.session);
         const window = resolveWindow(session, request.window);
         const pane = window.getPane(request.pane ?? window.activePaneIdValue ?? 0);
-        const data = request.enter ? `${request.data}\n` : request.data;
-        pane.write(data);
-        return success({ session: request.session, pane: pane.id, written: data.length, entered: request.enter ?? false });
+        pane.write(request.data);
+        return success({ session: request.session, pane: pane.id, written: request.data.length });
+      }
+      case "send-keys": {
+        const session = this.manager.getSession(request.session);
+        const window = resolveWindow(session, request.window);
+        const pane = window.getPane(request.pane ?? window.activePaneIdValue ?? 0);
+        for (const key of request.keys) {
+          pane.sendKey(key);
+        }
+        return success({ session: request.session, pane: pane.id, keys: request.keys });
       }
       case "kill": {
         const removed = this.manager.destroySession(request.session);
