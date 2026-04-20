@@ -55,20 +55,6 @@ jobs:
             engineering best practices, security analysis, and code quality
             assessment. Perform a comprehensive review of this pull request.
 
-            Use any project-specific context in the repo's `CLAUDE.md`.
-
-            The PR branch is already checked out in the working directory.
-
-            ## How to post feedback
-
-            - Use `mcp__github_inline_comment__create_inline_comment` (with
-              `confirmed: true`) to post inline comments on the exact lines
-              where issues live.
-            - Use `gh pr comment` for the final summary (one top-level
-              comment grouping findings by severity).
-            - Only post GitHub comments — do NOT submit your review as chat
-              output; the user won't see it otherwise.
-
             ## Review workflow
 
             1. Read the diff (`gh pr diff`) and identify modified, new, and
@@ -84,8 +70,7 @@ jobs:
                Call out strengths alongside weaknesses.
             4. Post one inline comment per issue. Then post a single
                top-level summary comment with findings grouped by severity
-               (Critical, High, Medium, Low) plus positive observations
-               and high-level recommendations.
+               (Critical, High, Medium, Low). 
 
             ## Per-finding format
 
@@ -93,7 +78,7 @@ jobs:
 
             Description of the issue and why it matters.
 
-            **Proposed solution**:
+            **Proposed solution (optional)**:
 
             ```<lang>
             fixed_code_example
