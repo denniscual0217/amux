@@ -55,12 +55,11 @@ jobs:
                - Error handling, edge cases, and race conditions
             3. Make sure every flagged issue is legitimate and actionable.
                Balance thoroughness with practicality — don't flag trivia.
-               Call out strengths alongside weaknesses.
             4. Post one inline comment per issue. Then post a single
                top-level summary comment with findings grouped by severity
-               (Critical, High, Medium, Low). 
+               (Critical, High, Medium, Low).
 
-            ## Per-finding format
+            ## Per-finding format (inline comments)
 
             **[Severity]** Short title
 
@@ -71,6 +70,69 @@ jobs:
             ```<lang>
             fixed_code_example
             ```
+
+            ## Summary-comment format (single top-level comment)
+
+            Use this exact structure. Open with a one-paragraph overview of
+            what the PR does and the overall verdict. Then list findings
+            grouped by severity, each severity as an H3 (`###`) with its
+            findings as `-` bullet items. Omit severity sections that have
+            no findings.
+
+            Example:
+
+            ```markdown
+            This PR adds an AI-powered code review workflow, a CLAUDE.md
+            codebase guide, and a meaningful improvement to daemon
+            lifecycle management (PID file tracking, better error
+            messages, shutdown signal handlers). The core idea is solid.
+            A few issues need attention before merging.
+
+            ### High
+
+            - **Self-triggering infinite loop in workflow** —
+              `.github/workflows/ai-code-review.yml` lines 6–9. The
+              `pull_request_review_comment: created` and
+              `pull_request_review: submitted` triggers fire every time
+              the bot itself posts an inline comment or submits a review,
+              creating a runaway loop that burns API quota and workflow
+              minutes on every PR. Fix by removing these two triggers or
+              adding `if: github.actor != 'github-actions[bot]'` on the job.
+
+            ### Medium
+
+            - **EPERM silently treated as "no process"** — `src/server.ts`
+              line 34. `process.kill(pid, 0)` throws `EPERM` when the
+              target process exists but belongs to a different OS user.
+              The bare `catch { return null }` conflates this with
+              "process is dead". Fix: check
+              `(e as NodeJS.ErrnoException).code === 'EPERM'` and return
+              the pid in that branch.
+            - **Hardcoded 300 ms SIGTERM wait** — `src/cli.ts` line 325.
+              A fixed 300 ms sleep after sending `SIGTERM` is unreliable
+              on slow hosts or under load. Replace with a polling loop
+              that checks `process.kill(pid, 0)` until it throws or a
+              deadline (e.g. 3 s) is reached.
+
+            ### Low
+
+            - **Unnecessary `id-token: write` permission** —
+              `.github/workflows/ai-code-review.yml` line 25. This
+              workflow only reads code and writes PR comments; OIDC
+              federation is not used. Remove to follow least-privilege.
+            - **Dynamic `import("node:fs")` shadows static import** —
+              `src/cli.ts` line 308. `fs` is already imported at the top
+              of the file; delete the dynamic import.
+            ```
+
+            Formatting rules:
+            - Each severity is an H3 heading (`### High`, `### Medium`, `### Low`).
+            - Each finding is a single `-` bullet.
+            - First sentence of each bullet: **bolded short title** — then
+              the file path and line(s).
+            - Keep bullets to one short paragraph; no sub-bullets, no code
+              fences in the summary (code examples belong in the inline
+              comments).
 
             ## Rules
 
