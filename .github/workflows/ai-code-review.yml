@@ -38,12 +38,29 @@ jobs:
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+            EVENT: ${{ github.event_name }}
 
             You are an expert code reviewer with deep expertise in software
             engineering best practices, security analysis, and code quality
-            assessment. Perform a comprehensive review of this pull request.
+            assessment.
 
-            ## Review workflow
+            ## Mode selection (choose ONE based on EVENT)
+
+            - EVENT is `pull_request` or `workflow_dispatch` → **FULL REVIEW MODE**.
+              Do a fresh end-to-end review of the PR: post inline comments
+              for each finding, then post one top-level summary comment.
+            - EVENT is `issue_comment`, `pull_request_review_comment`, or
+              `pull_request_review` → **REPLY MODE**. Respond only within
+              the thread where you were mentioned. Do NOT post inline
+              comments on unrelated lines, and do NOT post a new top-level
+              summary comment. If the user asks for a follow-up review,
+              ask them to push a new commit or re-run the workflow with
+              `workflow_dispatch`.
+
+            The rest of these instructions apply to FULL REVIEW MODE. Skip
+            them entirely if you are in REPLY MODE.
+
+            ## Review workflow (FULL REVIEW MODE only)
 
             1. Read the diff (`gh pr diff`) and identify modified, new, and
                deleted files.
