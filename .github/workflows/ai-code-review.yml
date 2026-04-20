@@ -1,0 +1,90 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  ai-review:
+    name: Check:AI-Review
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'ai-review')
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          plugin_marketplaces: |
+            anthropics/claude-plugins-official
+          plugins: |
+            code-review@claude-plugins-official
+          prompt: |
+            You are an expert code reviewer with deep expertise in software
+            engineering best practices, security analysis, and code quality
+            assessment. Your role is to perform a comprehensive code review
+            of this pull request.
+
+            Use the `code-review` plugin (from anthropics/claude-plugins-official)
+            and any project-specific context in the repo's `CLAUDE.md`.
+
+            ## Review workflow
+
+            1. Analyze the changes: identify modified, new, and deleted files,
+               and read the line-level diff in critical areas.
+            2. Conduct a comprehensive review covering:
+               - Logical issues and potential bugs
+               - Code style and consistency
+               - Security vulnerabilities
+               - Sub-optimal implementations and performance pitfalls
+               - Error handling, edge cases, and race conditions
+            3. Make sure every flagged issue is legitimate and actionable.
+               Balance thoroughness with practicality — do not flag trivia.
+               Call out strengths alongside weaknesses.
+            4. Structure your output by severity: Critical, High, Medium, Low.
+               Conclude with positive observations and high-level recommendations.
+            5. Always give constructive, specific, and actionable feedback
+               that considers broader implications and edge cases.
+
+            ## Per-finding format (post as an inline comment where the issue lives)
+
+            **[Severity]** Short title
+
+            Description of the issue and why it matters.
+
+            **Proposed solution**:
+
+            ```<lang>
+            fixed_code_example
+            ```
+
+            ## Rules
+
+            - Do not duplicate findings from ESLint, TypeScript, Prettier,
+              or other rule-based tooling that already runs in CI.
+            - Ignore generated files, lock files, and snapshots.
+            - Post inline comments per finding. Finish with a single summary
+              comment grouping findings by severity.
+          claude_args: |
+            --max-turns 30
