@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import type { PopupBinding } from "../amux/config.js";
 import type { FocusDirection } from "../types.js";
 
 export type TuiAction =
@@ -19,10 +20,19 @@ export type TuiAction =
   | { type: "session-picker" }
   | { type: "copy-mode" }
   | { type: "exit-copy-mode" }
+  | { type: "toggle-popup"; binding: PopupBinding }
+  | { type: "new-popup"; binding: PopupBinding }
+  | { type: "toggle-popup-fullscreen" }
+  | { type: "kill-popup" }
+  | { type: "toggle-right-sidebar" }
+  | { type: "focus-right-sidebar" }
+  | { type: "cycle-popup-next" }
+  | { type: "cycle-popup-prev" }
   | { type: "literal-input"; data: string };
 
 export interface KeyBindingOptions {
   prefix?: string;
+  popupBindings?: PopupBinding[];
 }
 
 function isDigit(value: string): boolean {
@@ -44,10 +54,20 @@ function decodePrefix(prefix: string): string {
 export class KeyBindingHandler extends EventEmitter {
   private awaitingPrefix = false;
   private readonly prefixes: Set<string>;
+  private popupBindings: Map<string, PopupBinding>;
 
   public constructor(options: KeyBindingOptions = {}) {
     super();
     this.prefixes = new Set([decodePrefix(options.prefix ?? "C-b"), decodePrefix("C-a")]);
+    this.popupBindings = new Map(
+      (options.popupBindings ?? []).filter((b) => b.key.length > 0).map((b) => [b.key, b]),
+    );
+  }
+
+  public setPopupBindings(bindings: PopupBinding[]): void {
+    this.popupBindings = new Map(
+      bindings.filter((b) => b.key.length > 0).map((b) => [b.key, b]),
+    );
   }
 
   public feed(chunk: string, copyMode = false): void {
@@ -73,6 +93,53 @@ export class KeyBindingHandler extends EventEmitter {
   private handlePrefixed(chunk: string): void {
     if (isDigit(chunk)) {
       this.emit("action", { type: "select-window", index: Number.parseInt(chunk, 10) } satisfies TuiAction);
+      return;
+    }
+
+    const popupBinding = this.popupBindings.get(chunk);
+    if (popupBinding) {
+      this.emit("action", { type: "toggle-popup", binding: popupBinding } satisfies TuiAction);
+      return;
+    }
+
+    if (chunk.length === 1) {
+      const lowered = chunk.toLowerCase();
+      if (lowered !== chunk) {
+        const shiftedBinding = this.popupBindings.get(lowered);
+        if (shiftedBinding) {
+          this.emit("action", { type: "new-popup", binding: shiftedBinding } satisfies TuiAction);
+          return;
+        }
+      }
+    }
+
+    if (chunk === "F") {
+      this.emit("action", { type: "toggle-popup-fullscreen" } satisfies TuiAction);
+      return;
+    }
+
+    if (chunk === "K") {
+      this.emit("action", { type: "kill-popup" } satisfies TuiAction);
+      return;
+    }
+
+    if (chunk === "B") {
+      this.emit("action", { type: "toggle-right-sidebar" } satisfies TuiAction);
+      return;
+    }
+
+    if (chunk === "r") {
+      this.emit("action", { type: "focus-right-sidebar" } satisfies TuiAction);
+      return;
+    }
+
+    if (chunk === "]" || chunk === "}") {
+      this.emit("action", { type: "cycle-popup-next" } satisfies TuiAction);
+      return;
+    }
+
+    if (chunk === "{") {
+      this.emit("action", { type: "cycle-popup-prev" } satisfies TuiAction);
       return;
     }
 

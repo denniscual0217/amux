@@ -8,6 +8,17 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 
+export interface PopupBinding {
+  /** Single-character key pressed after the prefix (case-sensitive). */
+  key: string;
+  /** Command to run in the popup (e.g. "claude --dangerously-skip-permissions"). */
+  command: string;
+  /** Short label rendered in the popup title bar. */
+  label?: string;
+  /** Extra env vars merged into the popup pane. */
+  env?: Record<string, string>;
+}
+
 export interface AmuxConfig {
   /** Path to the Unix socket. Default: /tmp/amux.sock */
   socketPath: string;
@@ -25,6 +36,8 @@ export interface AmuxConfig {
   defaultEnv: Record<string, string>;
   /** Prefix key for TUI bindings. Default: C-b */
   prefixKey: string;
+  /** Popup pane bindings. Each entry binds a key (after prefix) to an interactive command that opens as a floating popup over the current pane layout. */
+  popupBindings: PopupBinding[];
 }
 
 /**
@@ -87,6 +100,10 @@ function getDefaults(): AmuxConfig {
     defaultShell: getLoginShell(),
     defaultEnv: {},
     prefixKey: "C-b",
+    popupBindings: [
+      { key: "g", command: "claude --dangerously-skip-permissions", label: "claude" },
+      { key: "x", command: "codex --dangerously-bypass-approvals-and-sandbox", label: "codex" },
+    ],
   };
 }
 

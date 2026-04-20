@@ -1,6 +1,7 @@
 import process from "node:process";
-import { loadConfig } from "../amux/config.js";
+import { loadConfig, type PopupBinding } from "../amux/config.js";
 import {
+  Pane as PaneImpl,
   SessionManager,
   getDefaultShell,
   stripAnsi,
@@ -16,6 +17,9 @@ import { KeyBindingHandler, type TuiAction } from "./keybindings.js";
 import {
   type OverlayState,
   type PaneBuffer,
+  type PopupRenderState,
+  type RightSidebarItem,
+  type RightSidebarState,
   type SidebarItem,
   TerminalRenderer,
 } from "./renderer.js";
@@ -35,6 +39,20 @@ interface SidebarUiState {
   focused: boolean;
   selectedIndex: number;
   expandedSessions: Set<string>;
+}
+
+interface PopupInstance {
+  id: string;
+  ordinal: number;
+  binding: PopupBinding;
+  pane: Pane;
+  title: string;
+  fullscreen: boolean;
+  screen: PaneScreenSnapshot | null;
+  onData: (event: PaneDataEvent) => void;
+  onExit: (event: PaneExitEvent) => void;
+  createdAt: Date;
+  exitCode: number | null;
 }
 
 function createPaneBuffer(lines: string[] = []): PaneBuffer {
@@ -90,7 +108,11 @@ export class TuiApp {
   private readonly paneBuffers = new Map<number, PaneBuffer>();
   private readonly paneScreens = new Map<number, PaneScreenSnapshot>();
   private readonly copyMode = new CopyModeState();
-  private readonly keybindings = new KeyBindingHandler({ prefix: loadConfig().prefixKey });
+  private readonly config = loadConfig();
+  private readonly keybindings = new KeyBindingHandler({
+    prefix: this.config.prefixKey,
+    popupBindings: this.config.popupBindings,
+  });
   private readonly renderer = new TerminalRenderer();
   private readonly paneListeners = new Map<
     number,
@@ -101,6 +123,14 @@ export class TuiApp {
   private prompt: PromptState | null = null;
   private message: string | null = null;
   private stopResolve: (() => void) | null = null;
+  private readonly popups = new Map<string, PopupInstance>();
+  private readonly popupCountersByKey = new Map<string, number>();
+  private visiblePopupId: string | null = null;
+  private readonly rightSidebar = {
+    visible: true,
+    focused: false,
+    selectedIndex: 0,
+  };
   private readonly sidebar: SidebarUiState = {
     visible: false,
     focused: false,
@@ -147,6 +177,7 @@ export class TuiApp {
 
     this.active = false;
     this.unbindPanes();
+    this.killAllPopups();
     this.writeFrame(this.renderer.leaveAlternateScreen());
     this.stopResolve?.();
     this.stopResolve = null;
@@ -183,12 +214,19 @@ export class TuiApp {
       }
     }
 
+    if (this.rightSidebar.focused) {
+      if (this.handleRightSidebarInput(chunk)) {
+        return;
+      }
+    }
+
     this.keybindings.feed(chunk, this.copyMode.active);
   }
 
   public handleResize(cols: number, rows: number): void {
     this.renderer.resize(cols, rows);
     this.syncPaneSizes();
+    this.syncPopupSize();
     this.render();
   }
 
@@ -276,10 +314,163 @@ export class TuiApp {
             selectedIndex: this.sidebar.selectedIndex,
           },
           overlay: this.overlay,
+          popup: this.buildPopupRenderState(),
+          rightSidebar: this.buildRightSidebarState(),
           message: this.prompt ? `${this.prompt.kind}: ${this.prompt.value}` : this.message,
         }),
       );
     });
+  }
+
+  private buildPopupRenderState(): PopupRenderState | null {
+    if (!this.visiblePopupId) {
+      return null;
+    }
+    const instance = this.popups.get(this.visiblePopupId);
+    if (!instance) {
+      return null;
+    }
+    return {
+      title: this.formatPopupTitle(instance),
+      fullscreen: instance.fullscreen,
+      focused: !this.sidebar.focused && !this.overlay && !this.prompt && !this.copyMode.active,
+      screen: instance.screen,
+    };
+  }
+
+  private formatPopupTitle(instance: PopupInstance): string {
+    const ordinalSuffix = this.countInstancesOfBinding(instance.binding.key) > 1
+      ? `·${instance.ordinal}`
+      : "";
+    return `${instance.title}${ordinalSuffix}`;
+  }
+
+  private countInstancesOfBinding(bindingKey: string): number {
+    let count = 0;
+    for (const instance of this.popups.values()) {
+      if (instance.binding.key === bindingKey) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private buildRightSidebarState(): RightSidebarState {
+    const items: RightSidebarItem[] = [];
+    for (const instance of this.popups.values()) {
+      const hasSiblings = this.countInstancesOfBinding(instance.binding.key) > 1;
+      const keyLabel = hasSiblings ? `${instance.binding.key}·${instance.ordinal}` : instance.binding.key;
+      items.push({
+        key: keyLabel,
+        label: instance.title,
+        command: instance.binding.command,
+        running: instance.pane.running,
+        visible: instance.id === this.visiblePopupId,
+      });
+    }
+    const hasItems = items.length > 0;
+    const visible = this.rightSidebar.visible && hasItems;
+    const selectedIndex = hasItems
+      ? Math.max(0, Math.min(this.rightSidebar.selectedIndex, items.length - 1))
+      : 0;
+    return {
+      visible,
+      focused: visible && this.rightSidebar.focused,
+      width: TerminalRenderer.RIGHT_SIDEBAR_WIDTH,
+      items,
+      selectedIndex,
+    };
+  }
+
+  private listPopupIds(): string[] {
+    return [...this.popups.keys()];
+  }
+
+  private toggleRightSidebarFocus(): void {
+    const ids = this.listPopupIds();
+    if (ids.length === 0) {
+      this.message = "no popups to navigate";
+      this.render();
+      return;
+    }
+    if (!this.rightSidebar.visible) {
+      this.rightSidebar.visible = true;
+      this.syncPaneSizes();
+      this.syncPopupSize();
+    }
+    this.rightSidebar.focused = !this.rightSidebar.focused;
+    if (this.rightSidebar.focused) {
+      const activeIndex = this.visiblePopupId ? ids.indexOf(this.visiblePopupId) : -1;
+      this.rightSidebar.selectedIndex = activeIndex >= 0 ? activeIndex : ids.length - 1;
+    }
+    this.render();
+  }
+
+  private cyclePopup(delta: number): void {
+    const ids = this.listPopupIds();
+    if (ids.length === 0) {
+      return;
+    }
+    const currentIndex = this.visiblePopupId ? ids.indexOf(this.visiblePopupId) : -1;
+    const nextIndex = ((currentIndex < 0 ? 0 : currentIndex + delta) + ids.length) % ids.length;
+    this.activatePopupByIndex(nextIndex);
+  }
+
+  private handleRightSidebarInput(chunk: string): boolean {
+    const ids = this.listPopupIds();
+    if (ids.length === 0) {
+      this.rightSidebar.focused = false;
+      this.render();
+      return true;
+    }
+    switch (chunk) {
+      case "\u001b":
+        this.rightSidebar.focused = false;
+        this.render();
+        return true;
+      case "\u001b[A":
+      case "k":
+        this.moveRightSidebarSelection(-1);
+        return true;
+      case "\u001b[B":
+      case "j":
+        this.moveRightSidebarSelection(1);
+        return true;
+      case "\r":
+        this.activatePopupByIndex(this.rightSidebar.selectedIndex);
+        this.rightSidebar.focused = false;
+        this.render();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  private moveRightSidebarSelection(delta: number): void {
+    const ids = this.listPopupIds();
+    if (ids.length === 0) {
+      return;
+    }
+    this.rightSidebar.selectedIndex =
+      (this.rightSidebar.selectedIndex + delta + ids.length) % ids.length;
+    this.render();
+  }
+
+  private activatePopupByIndex(index: number): void {
+    const ids = this.listPopupIds();
+    const id = ids[index];
+    if (!id) {
+      return;
+    }
+    const instance = this.popups.get(id);
+    if (!instance) {
+      return;
+    }
+    this.visiblePopupId = id;
+    this.rightSidebar.selectedIndex = index;
+    this.message = `popup: ${this.formatPopupTitle(instance)}`;
+    this.syncPopupSize();
+    this.render();
   }
 
   private syncPaneSizes(): void {
@@ -293,6 +484,7 @@ export class TuiApp {
         items: [],
         selectedIndex: this.sidebar.selectedIndex,
       },
+      rightSidebar: this.buildRightSidebarState(),
     });
     window.resizePanes(
       new Map(
@@ -409,10 +601,46 @@ export class TuiApp {
         }
         if (this.copyMode.active) {
           this.handleCopyInput(action.data);
-        } else {
+          return;
+        }
+        if (this.visiblePopupId) {
+          this.popups.get(this.visiblePopupId)?.pane.pty.write(action.data);
+          return;
+        }
+        {
           const pane = window.activePane ?? window.listPanes()[0] ?? null;
           pane?.pty.write(action.data);
         }
+        return;
+      case "toggle-popup":
+        this.togglePopup(action.binding);
+        return;
+      case "new-popup":
+        this.createPopupInstance(action.binding);
+        return;
+      case "toggle-popup-fullscreen":
+        this.togglePopupFullscreen();
+        return;
+      case "kill-popup":
+        this.killVisiblePopup();
+        return;
+      case "toggle-right-sidebar":
+        this.rightSidebar.visible = !this.rightSidebar.visible;
+        if (!this.rightSidebar.visible) {
+          this.rightSidebar.focused = false;
+        }
+        this.syncPaneSizes();
+        this.syncPopupSize();
+        this.render();
+        return;
+      case "focus-right-sidebar":
+        this.toggleRightSidebarFocus();
+        return;
+      case "cycle-popup-next":
+        this.cyclePopup(1);
+        return;
+      case "cycle-popup-prev":
+        this.cyclePopup(-1);
         return;
       case "new-window":
         this.manager.createWindow(this.sessionName, {
@@ -781,6 +1009,168 @@ export class TuiApp {
     }
     this.syncPaneSizes();
     this.render();
+  }
+
+  private togglePopup(binding: PopupBinding): void {
+    const visible = this.visiblePopupId ? this.popups.get(this.visiblePopupId) : null;
+    if (visible && visible.binding.key === binding.key) {
+      this.visiblePopupId = null;
+      this.message = `popup hidden: ${this.formatPopupTitle(visible)}`;
+      this.render();
+      return;
+    }
+
+    const existing = this.findLatestInstanceOfBinding(binding.key);
+    if (existing) {
+      this.visiblePopupId = existing.id;
+      this.message = `popup: ${this.formatPopupTitle(existing)}`;
+      this.syncPopupSize();
+      this.render();
+      return;
+    }
+
+    this.createPopupInstance(binding);
+  }
+
+  private findLatestInstanceOfBinding(bindingKey: string): PopupInstance | null {
+    let latest: PopupInstance | null = null;
+    for (const instance of this.popups.values()) {
+      if (instance.binding.key !== bindingKey) continue;
+      if (!latest || instance.ordinal > latest.ordinal) {
+        latest = instance;
+      }
+    }
+    return latest;
+  }
+
+  private createPopupInstance(binding: PopupBinding): void {
+    const rect = this.renderer.getPopupRect(false);
+    const innerCols = Math.max(1, rect.width - 2);
+    const innerRows = Math.max(1, rect.height - 2);
+    const activePane = this.currentWindow().activePane;
+    const cwd = activePane?.cwd ?? this.currentSession().cwd ?? process.cwd();
+    let pane: Pane;
+    try {
+      pane = new PaneImpl(0, this.sessionName, binding.command, {
+        command: binding.command,
+        cwd,
+        env: { ...this.config.defaultEnv, ...binding.env },
+        cols: innerCols,
+        rows: innerRows,
+      });
+    } catch (error) {
+      this.message = `popup failed: ${error instanceof Error ? error.message : String(error)}`;
+      this.render();
+      return;
+    }
+
+    const ordinal = (this.popupCountersByKey.get(binding.key) ?? 0) + 1;
+    this.popupCountersByKey.set(binding.key, ordinal);
+    const id = `${binding.key}#${ordinal}`;
+    const entry: PopupInstance = {
+      id,
+      ordinal,
+      pane,
+      binding,
+      title: binding.label?.trim() || binding.command,
+      fullscreen: false,
+      screen: pane.getScreenSnapshot(),
+      createdAt: new Date(),
+      exitCode: null,
+      onData: (_event: PaneDataEvent): void => {
+        const current = this.popups.get(id);
+        if (!current) {
+          return;
+        }
+        current.screen = pane.getScreenSnapshot();
+        if (this.visiblePopupId === id) {
+          this.render();
+        }
+      },
+      onExit: (event: PaneExitEvent): void => {
+        const current = this.popups.get(id);
+        if (!current) {
+          return;
+        }
+        current.exitCode = event.code ?? 0;
+        this.message = `popup "${this.formatPopupTitle(current)}" exited (${event.code ?? "null"})`;
+        this.removePopup(id);
+        this.render();
+      },
+    };
+    pane.on("data", entry.onData);
+    pane.on("exit", entry.onExit);
+    this.popups.set(id, entry);
+    this.visiblePopupId = id;
+    this.rightSidebar.selectedIndex = this.popups.size - 1;
+    this.message = `popup: ${this.formatPopupTitle(entry)}`;
+    this.render();
+  }
+
+  private removePopup(id: string): void {
+    const instance = this.popups.get(id);
+    if (!instance) {
+      return;
+    }
+    instance.pane.off("data", instance.onData);
+    instance.pane.off("exit", instance.onExit);
+    try {
+      if (instance.pane.running) {
+        instance.pane.kill();
+      }
+    } catch {
+      // pty may already be gone
+    }
+    this.popups.delete(id);
+    if (this.visiblePopupId === id) {
+      this.visiblePopupId = null;
+    }
+  }
+
+  private killVisiblePopup(): void {
+    if (!this.visiblePopupId) {
+      return;
+    }
+    const instance = this.popups.get(this.visiblePopupId);
+    if (instance) {
+      this.message = `killed popup "${this.formatPopupTitle(instance)}"`;
+    }
+    this.removePopup(this.visiblePopupId);
+    this.render();
+  }
+
+  private killAllPopups(): void {
+    for (const id of [...this.popups.keys()]) {
+      this.removePopup(id);
+    }
+  }
+
+  private togglePopupFullscreen(): void {
+    if (!this.visiblePopupId) {
+      return;
+    }
+    const instance = this.popups.get(this.visiblePopupId);
+    if (!instance) {
+      return;
+    }
+    instance.fullscreen = !instance.fullscreen;
+    this.syncPopupSize();
+    this.render();
+  }
+
+  private syncPopupSize(): void {
+    if (!this.visiblePopupId) {
+      return;
+    }
+    const instance = this.popups.get(this.visiblePopupId);
+    if (!instance) {
+      return;
+    }
+    const rect = this.renderer.getPopupRect(instance.fullscreen);
+    const innerCols = Math.max(1, rect.width - 2);
+    const innerRows = Math.max(1, rect.height - 2);
+    instance.pane.resize(innerCols, innerRows);
+    instance.screen = instance.pane.getScreenSnapshot();
   }
 
   private toggleSidebarFocus(): void {

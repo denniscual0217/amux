@@ -112,6 +112,37 @@ All keybindings use `Ctrl+b` as the prefix (configurable).
 | `Ctrl+b w` | Window picker |
 | `Ctrl+b s` | Session picker |
 | `Ctrl+b [` | Enter copy mode |
+| `Ctrl+b g` | Toggle claude popup pane (default binding) |
+| `Ctrl+b x` | Toggle codex popup pane (default binding) |
+| `Ctrl+b G` / `X` | Spawn a **new** instance of that popup's binding |
+| `Ctrl+b F` | Toggle fullscreen for the visible popup |
+| `Ctrl+b K` | Kill the visible popup pane |
+| `Ctrl+b B` | Toggle the right sidebar (popup list) |
+| `Ctrl+b r` | Focus the right sidebar (navigate with ↑/↓/j/k, Enter to activate, Esc to unfocus) |
+| `Ctrl+b ]` / `{` | Cycle to next / previous popup |
+
+### Popup panes
+
+Popup panes float over the current window layout — like modal dialogs on top of nvim or any other program — and run any interactive command you like. The popup inherits the current pane's `cwd` (falls back to the session's `cwd`). Prefix keys still work from inside the popup.
+
+- **Lowercase binding key** (`Ctrl+b g`) — toggle hide/show of the most recent instance. Creates one if none exists. The process keeps running when hidden.
+- **Uppercase binding key** (`Ctrl+b G`) — always spawn a new instance. Multiple instances of the same binding can coexist.
+- `Ctrl+b K` — explicitly kill the visible popup.
+
+The right sidebar (auto-shown when popups exist) lists every live popup: `●` = visible, `○` = hidden, `✗` = exited. Instance counters appear when multiple copies of a binding are running (e.g., `g·1`, `g·2`).
+
+Configure bindings in `~/.amux/config.json`:
+
+```json
+{
+  "popupBindings": [
+    { "key": "g", "command": "claude --dangerously-skip-permissions", "label": "claude" },
+    { "key": "x", "command": "codex --dangerously-bypass-approvals-and-sandbox", "label": "codex" }
+  ]
+}
+```
+
+Each entry binds a single lowercase character (after the prefix) to a command. The uppercase variant of the same letter always spawns a **new** instance, so `Ctrl+b g` toggles the most recent claude popup and `Ctrl+b G` opens a second one in parallel.
 
 ## Screenshots
 
@@ -212,7 +243,11 @@ Config file: `~/.amux/config.json`
   "recordingsDir": "~/.amux/recordings",
   "defaultShell": "/usr/bin/zsh",
   "defaultEnv": {},
-  "prefixKey": "C-b"
+  "prefixKey": "C-b",
+  "popupBindings": [
+    { "key": "g", "command": "claude --dangerously-skip-permissions", "label": "claude" },
+    { "key": "x", "command": "codex --dangerously-bypass-approvals-and-sandbox", "label": "codex" }
+  ]
 }
 ```
 

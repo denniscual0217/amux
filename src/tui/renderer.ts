@@ -46,6 +46,29 @@ export interface SidebarState {
   selectedIndex: number;
 }
 
+export interface PopupRenderState {
+  title: string;
+  fullscreen: boolean;
+  focused: boolean;
+  screen: PaneScreenSnapshot | null;
+}
+
+export interface RightSidebarItem {
+  key: string;
+  label: string;
+  command: string;
+  running: boolean;
+  visible: boolean;
+}
+
+export interface RightSidebarState {
+  visible: boolean;
+  focused: boolean;
+  width: number;
+  items: RightSidebarItem[];
+  selectedIndex: number;
+}
+
 export interface RenderState {
   session: SessionSnapshot;
   sessions: SessionSnapshot[];
@@ -53,8 +76,17 @@ export interface RenderState {
   paneScreens: Map<number, PaneScreenSnapshot>;
   copyMode: CopyModeState;
   sidebar: SidebarState;
+  rightSidebar?: RightSidebarState | null;
   overlay?: OverlayState | null;
+  popup?: PopupRenderState | null;
   message?: string | null;
+}
+
+export interface PopupRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 function move(row: number, column: number): string {
@@ -140,6 +172,7 @@ export class TerminalRenderer {
   private height = 24;
   private lastState: RenderState | null = null;
   public static readonly SIDEBAR_WIDTH = 25;
+  public static readonly RIGHT_SIDEBAR_WIDTH = 22;
 
   public enterAlternateScreen(): string {
     return "\u001B[?1049h\u001B[?25l";
@@ -159,7 +192,25 @@ export class TerminalRenderer {
     return this.getRegionsForState(this.lastState, session);
   }
 
-  public getRegionsForState(state?: Pick<RenderState, "session" | "sidebar"> | null, session?: SessionSnapshot | null): PaneRegion[] {
+  public getPopupRect(fullscreen: boolean): PopupRect {
+    const usableHeight = Math.max(2, this.height - 1);
+    if (fullscreen) {
+      return {
+        x: 1,
+        y: 1,
+        width: Math.max(3, this.width),
+        height: Math.max(3, usableHeight),
+      };
+    }
+
+    const width = Math.max(10, Math.min(this.width - 2, Math.floor(this.width * 0.8)));
+    const height = Math.max(5, Math.min(usableHeight - 2, Math.floor(usableHeight * 0.75)));
+    const x = Math.max(1, Math.floor((this.width - width) / 2) + 1);
+    const y = Math.max(1, Math.floor((usableHeight - height) / 2) + 1);
+    return { x, y, width, height };
+  }
+
+  public getRegionsForState(state?: Pick<RenderState, "session" | "sidebar" | "rightSidebar"> | null, session?: SessionSnapshot | null): PaneRegion[] {
     const targetSession = session ?? state?.session;
     if (!targetSession) {
       return [];
@@ -167,8 +218,11 @@ export class TerminalRenderer {
 
     const window = currentWindow(targetSession);
     const sidebarWidth = state?.sidebar.visible ? Math.min(state.sidebar.width, Math.max(0, this.width - 1)) : 0;
+    const rightSidebarWidth = state?.rightSidebar?.visible
+      ? Math.min(state.rightSidebar.width, Math.max(0, this.width - sidebarWidth - 1))
+      : 0;
     const paneX = 1 + sidebarWidth;
-    const paneWidth = Math.max(1, this.width - sidebarWidth);
+    const paneWidth = Math.max(1, this.width - sidebarWidth - rightSidebarWidth);
     if (window.zoomedPaneId !== null) {
       return [
         {
@@ -194,6 +248,9 @@ export class TerminalRenderer {
     const regions = this.getRegionsForState(state);
     const screen: string[] = ["\u001B[?25l\u001B[0m\u001B[H"];
     const sidebarWidth = state.sidebar.visible ? Math.min(state.sidebar.width, Math.max(0, this.width - 1)) : 0;
+    const rightSidebarWidth = state.rightSidebar?.visible
+      ? Math.min(state.rightSidebar.width, Math.max(0, this.width - sidebarWidth - 1))
+      : 0;
 
     if (sidebarWidth > 0) {
       const contentWidth = Math.max(0, sidebarWidth - 1);
@@ -218,6 +275,37 @@ export class TerminalRenderer {
         }
         screen.push(`${move(row, sidebarWidth)}\u001B[38;5;240m│\u001B[0m`);
       }
+    }
+
+    if (rightSidebarWidth > 0 && state.rightSidebar) {
+      const startColumn = this.width - rightSidebarWidth + 1;
+      const contentWidth = Math.max(0, rightSidebarWidth - 1);
+      const rows = Math.max(1, this.height - 1);
+      const bg = "\u001B[48;5;235m";
+      for (let row = 1; row <= rows; row += 1) {
+        screen.push(`${move(row, startColumn)}\u001B[38;5;240m│\u001B[0m`);
+        screen.push(`${move(row, startColumn + 1)}${bg}${" ".repeat(contentWidth)}\u001B[0m`);
+      }
+      const title = trimVisible(" agents ", contentWidth);
+      screen.push(`${move(1, startColumn + 1)}${bg}\u001B[1;38;5;81m${title}\u001B[0m`);
+      state.rightSidebar.items.forEach((item, index) => {
+        const row = 2 + index;
+        if (row > rows) {
+          return;
+        }
+        const statusIcon = !item.running ? "✗" : item.visible ? "●" : "○";
+        const label = trimVisible(`${statusIcon} ${item.key} ${item.label}`, contentWidth);
+        const color = !item.running
+          ? "\u001B[38;5;244m"
+          : item.visible
+            ? "\u001B[1;38;5;213m"
+            : "\u001B[38;5;250m";
+        const focusStyle =
+          state.rightSidebar?.focused && index === state.rightSidebar.selectedIndex
+            ? "\u001B[48;5;238m"
+            : "";
+        screen.push(`${move(row, startColumn + 1)}${bg}${focusStyle}${color}${label}\u001B[0m`);
+      });
     }
 
     for (const region of regions) {
@@ -310,6 +398,51 @@ export class TerminalRenderer {
         const cursorRow = clamp(paneScreen.cursor.row, 0, innerHeight - 1);
         const cursorColumn = clamp(paneScreen.cursor.col, 0, innerWidth - 1);
         screen.push(`${move(region.y + 1 + cursorRow, region.x + 1 + cursorColumn)}\u001B[7m \u001B[0m`);
+      }
+    }
+
+    if (state.popup) {
+      const rect = this.getPopupRect(state.popup.fullscreen);
+      const innerWidth = Math.max(1, rect.width - 2);
+      const innerHeight = Math.max(1, rect.height - 2);
+      const border = state.popup.focused ? "\u001B[38;5;213m" : "\u001B[38;5;240m";
+      const blank = " ".repeat(innerWidth);
+      for (let row = 1; row < rect.height - 1; row += 1) {
+        screen.push(`${move(rect.y + row, rect.x)}${border}|\u001B[0m`);
+        screen.push(`${move(rect.y + row, rect.x + 1)}\u001B[0m${blank}`);
+        screen.push(`${move(rect.y + row, rect.x + rect.width - 1)}${border}|\u001B[0m`);
+      }
+      for (let column = 0; column < rect.width; column += 1) {
+        const topChar = column === 0 || column === rect.width - 1 ? "+" : "-";
+        screen.push(`${move(rect.y, rect.x + column)}${border}${topChar}\u001B[0m`);
+        screen.push(
+          `${move(rect.y + rect.height - 1, rect.x + column)}${border}${topChar}\u001B[0m`,
+        );
+      }
+      const title = ` ${state.popup.title}${state.popup.fullscreen ? " · fullscreen" : ""} `;
+      screen.push(
+        `${move(rect.y, rect.x + 2)}${border}${trimVisible(title, Math.max(1, innerWidth - 1))}\u001B[0m`,
+      );
+
+      const popupScreen = state.popup.screen;
+      if (popupScreen) {
+        const lines = popupScreen.lines.slice(0, innerHeight).map((line) => {
+          const plain = stripAnsiForWidth(line);
+          if (plain.length >= innerWidth) {
+            return line;
+          }
+          return `${line}${" ".repeat(innerWidth - plain.length)}`;
+        });
+        lines.forEach((line, index) => {
+          screen.push(`${move(rect.y + 1 + index, rect.x + 1)}${line}`);
+        });
+        if (state.popup.focused) {
+          const cursorRow = clamp(popupScreen.cursor.row, 0, innerHeight - 1);
+          const cursorColumn = clamp(popupScreen.cursor.col, 0, innerWidth - 1);
+          screen.push(
+            `${move(rect.y + 1 + cursorRow, rect.x + 1 + cursorColumn)}\u001B[7m \u001B[0m`,
+          );
+        }
       }
     }
 
