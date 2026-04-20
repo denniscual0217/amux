@@ -45,18 +45,13 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          plugin_marketplaces: |
-            anthropics/claude-plugins-official
-          plugins: |
-            code-review@claude-plugins-official
           prompt: |
             You are an expert code reviewer with deep expertise in software
             engineering best practices, security analysis, and code quality
             assessment. Your role is to perform a comprehensive code review
             of this pull request.
 
-            Use the `code-review` plugin (from anthropics/claude-plugins-official)
-            and any project-specific context in the repo's `CLAUDE.md`.
+            Use any project-specific context in the repo's `CLAUDE.md`.
 
             ## Review workflow
 
