@@ -2,7 +2,13 @@ name: AI Code Review
 
 on:
   pull_request:
-    types: [labeled]
+    types: [opened, reopened, labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -11,8 +17,8 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+  cancel-in-progress: false
 
 jobs:
   ai-review:
@@ -20,7 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.label.name == 'ai-review')
+      (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'reopened' || (github.event.action == 'labeled' && github.event.label.name == 'ai-review'))) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && github.event.review.body != null && contains(github.event.review.body, '@claude'))
     permissions:
       contents: read
       pull-requests: write
