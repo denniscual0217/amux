@@ -159,6 +159,21 @@ function currentWindow(session: SessionSnapshot): WindowSnapshot {
   );
 }
 
+const BOX = {
+  topLeft: "╭",
+  topRight: "╮",
+  bottomLeft: "╰",
+  bottomRight: "╯",
+  horizontal: "─",
+  vertical: "│",
+} as const;
+
+const BORDER_INACTIVE = "\u001B[38;5;244m";
+const BORDER_ACTIVE = "\u001B[38;5;159m";
+const BORDER_POPUP_FOCUSED = "\u001B[38;5;213m";
+const BORDER_POPUP_HIDDEN = "\u001B[38;5;244m";
+const BORDER_OVERLAY = "\u001B[38;5;248m";
+
 function renderSidebarItemLabel(item: SidebarItem, width: number): string {
   if (item.kind === "session") {
     return trimVisible(`${item.expanded ? "▾" : "▸"} ${item.sessionName}`, width);
@@ -310,7 +325,7 @@ export class TerminalRenderer {
 
     for (const region of regions) {
       const isActive = region.paneId === window.activePaneId;
-      const borderColor = isActive ? "\u001B[38;5;81m" : "\u001B[38;5;240m";
+      const borderColor = isActive ? BORDER_ACTIVE : BORDER_INACTIVE;
       const innerWidth = Math.max(1, region.width - 2);
       const innerHeight = Math.max(1, region.height - 2);
       const buffer = state.paneBuffers.get(region.paneId) ?? { lines: [] };
@@ -322,27 +337,25 @@ export class TerminalRenderer {
           : lines;
       const visibleLines = copyLines.slice(-innerHeight);
 
-      for (let column = 0; column < region.width; column += 1) {
-        const topChar = column === 0 || column === region.width - 1 ? "+" : "-";
-        const bottomChar = topChar;
-        screen.push(`${move(region.y, region.x + column)}${borderColor}${topChar}\u001B[0m`);
-        screen.push(
-          `${move(region.y + region.height - 1, region.x + column)}${borderColor}${bottomChar}\u001B[0m`,
-        );
-      }
+      const horizontalSpan = Math.max(0, region.width - 2);
+      const topLine = `${BOX.topLeft}${BOX.horizontal.repeat(horizontalSpan)}${BOX.topRight}`;
+      const bottomLine = `${BOX.bottomLeft}${BOX.horizontal.repeat(horizontalSpan)}${BOX.bottomRight}`;
+      screen.push(`${move(region.y, region.x)}${borderColor}${topLine}\u001B[0m`);
+      screen.push(
+        `${move(region.y + region.height - 1, region.x)}${borderColor}${bottomLine}\u001B[0m`,
+      );
 
       for (let row = 1; row < region.height - 1; row += 1) {
-        screen.push(`${move(region.y + row, region.x)}${borderColor}|\u001B[0m`);
-        screen.push(
-          `${move(region.y + row, region.x + region.width - 1)}${borderColor}|\u001B[0m`,
-        );
+        screen.push(`${move(region.y + row, region.x)}${borderColor}${BOX.vertical}\u001B[0m`);
         screen.push(`${move(region.y + row, region.x + 1)}${" ".repeat(innerWidth)}`);
+        screen.push(
+          `${move(region.y + row, region.x + region.width - 1)}${borderColor}${BOX.vertical}\u001B[0m`,
+        );
       }
 
-      const title = ` ${window.name}.${region.paneId} `;
-      screen.push(
-        `${move(region.y, region.x + 2)}${borderColor}${trimVisible(title, innerWidth - 1)}\u001B[0m`,
-      );
+      const rawTitle = ` ${window.name}.${region.paneId} `;
+      const titleText = rawTitle.slice(0, Math.max(1, innerWidth - 1));
+      screen.push(`${move(region.y, region.x + 2)}${borderColor}${titleText}\u001B[0m`);
 
       const normalLines =
         paneScreen?.lines.slice(0, innerHeight).map((line) => {
@@ -405,24 +418,21 @@ export class TerminalRenderer {
       const rect = this.getPopupRect(state.popup.fullscreen);
       const innerWidth = Math.max(1, rect.width - 2);
       const innerHeight = Math.max(1, rect.height - 2);
-      const border = state.popup.focused ? "\u001B[38;5;213m" : "\u001B[38;5;240m";
+      const border = state.popup.focused ? BORDER_POPUP_FOCUSED : BORDER_POPUP_HIDDEN;
       const blank = " ".repeat(innerWidth);
+      const horizontalSpan = Math.max(0, rect.width - 2);
+      const topLine = `${BOX.topLeft}${BOX.horizontal.repeat(horizontalSpan)}${BOX.topRight}`;
+      const bottomLine = `${BOX.bottomLeft}${BOX.horizontal.repeat(horizontalSpan)}${BOX.bottomRight}`;
+      screen.push(`${move(rect.y, rect.x)}${border}${topLine}\u001B[0m`);
+      screen.push(`${move(rect.y + rect.height - 1, rect.x)}${border}${bottomLine}\u001B[0m`);
       for (let row = 1; row < rect.height - 1; row += 1) {
-        screen.push(`${move(rect.y + row, rect.x)}${border}|\u001B[0m`);
+        screen.push(`${move(rect.y + row, rect.x)}${border}${BOX.vertical}\u001B[0m`);
         screen.push(`${move(rect.y + row, rect.x + 1)}\u001B[0m${blank}`);
-        screen.push(`${move(rect.y + row, rect.x + rect.width - 1)}${border}|\u001B[0m`);
+        screen.push(`${move(rect.y + row, rect.x + rect.width - 1)}${border}${BOX.vertical}\u001B[0m`);
       }
-      for (let column = 0; column < rect.width; column += 1) {
-        const topChar = column === 0 || column === rect.width - 1 ? "+" : "-";
-        screen.push(`${move(rect.y, rect.x + column)}${border}${topChar}\u001B[0m`);
-        screen.push(
-          `${move(rect.y + rect.height - 1, rect.x + column)}${border}${topChar}\u001B[0m`,
-        );
-      }
-      const title = ` ${state.popup.title}${state.popup.fullscreen ? " · fullscreen" : ""} `;
-      screen.push(
-        `${move(rect.y, rect.x + 2)}${border}${trimVisible(title, Math.max(1, innerWidth - 1))}\u001B[0m`,
-      );
+      const rawTitle = ` ${state.popup.title}${state.popup.fullscreen ? " · fullscreen" : ""} `;
+      const titleText = rawTitle.slice(0, Math.max(1, innerWidth - 1));
+      screen.push(`${move(rect.y, rect.x + 2)}${border}${titleText}\u001B[0m`);
 
       const popupScreen = state.popup.screen;
       if (popupScreen) {
@@ -457,9 +467,12 @@ export class TerminalRenderer {
       const boxHeight = Math.min(this.height - 4, state.overlay.items.length + 4);
       const boxX = Math.max(2, Math.floor((this.width - boxWidth) / 2));
       const boxY = Math.max(2, Math.floor((this.height - boxHeight) / 2));
-      screen.push(`${move(boxY, boxX)}+${"-".repeat(boxWidth - 2)}+`);
+      const hSpan = Math.max(0, boxWidth - 2);
+      const topBorder = `${BOX.topLeft}${BOX.horizontal.repeat(hSpan)}${BOX.topRight}`;
+      const bottomBorder = `${BOX.bottomLeft}${BOX.horizontal.repeat(hSpan)}${BOX.bottomRight}`;
+      screen.push(`${move(boxY, boxX)}${BORDER_OVERLAY}${topBorder}\u001B[0m`);
       screen.push(
-        `${move(boxY + 1, boxX)}|${trimVisible(` ${state.overlay.title}`, boxWidth - 2)}|`,
+        `${move(boxY + 1, boxX)}${BORDER_OVERLAY}${BOX.vertical}\u001B[0m${trimVisible(` ${state.overlay.title}`, boxWidth - 2)}${BORDER_OVERLAY}${BOX.vertical}\u001B[0m`,
       );
       for (let index = 0; index < boxHeight - 3; index += 1) {
         const item = state.overlay.items[index] ?? "";
@@ -467,9 +480,9 @@ export class TerminalRenderer {
         const body = active
           ? `\u001B[7m${trimVisible(item, boxWidth - 2)}\u001B[0m`
           : trimVisible(item, boxWidth - 2);
-        screen.push(`${move(boxY + 2 + index, boxX)}|${body}|`);
+        screen.push(`${move(boxY + 2 + index, boxX)}${BORDER_OVERLAY}${BOX.vertical}\u001B[0m${body}${BORDER_OVERLAY}${BOX.vertical}\u001B[0m`);
       }
-      screen.push(`${move(boxY + boxHeight - 1, boxX)}+${"-".repeat(boxWidth - 2)}+`);
+      screen.push(`${move(boxY + boxHeight - 1, boxX)}${BORDER_OVERLAY}${bottomBorder}\u001B[0m`);
     }
 
     if (state.message) {
