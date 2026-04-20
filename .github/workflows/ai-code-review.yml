@@ -50,12 +50,20 @@ jobs:
               Do a fresh end-to-end review of the PR: post inline comments
               for each finding, then post one top-level summary comment.
             - EVENT is `issue_comment`, `pull_request_review_comment`, or
-              `pull_request_review` → **REPLY MODE**. Respond only within
-              the thread where you were mentioned. Do NOT post inline
-              comments on unrelated lines, and do NOT post a new top-level
-              summary comment. If the user asks for a follow-up review,
-              ask them to push a new commit or re-run the workflow with
-              `workflow_dispatch`.
+              `pull_request_review` → **REPLY MODE**. Reply in the same
+              place the user mentioned you:
+                - `issue_comment` → the user commented at the top level
+                  of the PR; reply with a top-level PR comment
+                  (`gh pr comment`).
+                - `pull_request_review_comment` → the user mentioned you
+                  in an inline code thread; reply inside that same inline
+                  thread (do not post a top-level comment).
+                - `pull_request_review` → the user included `@claude` in
+                  a review body; reply with a top-level PR comment.
+              Do NOT post a new "summary of the PR" style comment, and do
+              NOT add inline comments on unrelated lines. If the user
+              asks for a follow-up full review, tell them to push a new
+              commit or re-run the workflow with `workflow_dispatch`.
 
             The rest of these instructions apply to FULL REVIEW MODE. Skip
             them entirely if you are in REPLY MODE.
