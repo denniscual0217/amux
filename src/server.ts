@@ -13,9 +13,30 @@ import { saveTemplate, applyTemplate, listTemplates } from "./templates.js";
 import { listSessionsByTag } from "./tags.js";
 
 export const DEFAULT_SOCKET_PATH = "/tmp/amux.sock";
+export const DEFAULT_PID_PATH = "/tmp/amux.pid";
 
 export function getSocketPath(): string {
   return process.env.AMUX_SOCKET ?? loadConfig().socketPath ?? DEFAULT_SOCKET_PATH;
+}
+
+export function getPidFilePath(): string {
+  return process.env.AMUX_PID_FILE ?? DEFAULT_PID_PATH;
+}
+
+export function readDaemonPid(): number | null {
+  try {
+    const raw = fs.readFileSync(getPidFilePath(), "utf8").trim();
+    const pid = Number.parseInt(raw, 10);
+    if (!Number.isFinite(pid) || pid <= 0) return null;
+    try {
+      process.kill(pid, 0);
+      return pid;
+    } catch {
+      return null;
+    }
+  } catch {
+    return null;
+  }
 }
 
 function success<T>(data: T): ApiResponse<T> {
@@ -28,6 +49,10 @@ function failure(message: string): ApiResponse {
 
 function defaultCommand(): string {
   return `exec ${getDefaultShell()}`;
+}
+
+function isAddressInUse(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error && (error as { code?: string }).code === "EADDRINUSE";
 }
 
 function resolveWindow(session: Session, window: string | number | undefined) {
@@ -45,6 +70,13 @@ export class AmuxServer {
     socketPath = getSocketPath(),
     streamPort = getStreamPortFromConfig(),
   ): Promise<void> {
+    const existingPid = readDaemonPid();
+    if (existingPid && existingPid !== process.pid) {
+      throw new Error(
+        `amux daemon already running (pid ${existingPid}) — run \`amux stop\` or \`kill ${existingPid}\``,
+      );
+    }
+
     await fs.promises.rm(socketPath, { force: true });
 
     this.server = net.createServer((socket) => {
@@ -93,7 +125,23 @@ export class AmuxServer {
       });
 
       this.streamServer = new AmuxStreamServer();
-      await this.streamServer.start(streamPort);
+      try {
+        await this.streamServer.start(streamPort);
+      } catch (streamError) {
+        if (isAddressInUse(streamError)) {
+          throw new Error(
+            `stream port ${streamPort} already in use — another process is holding it (try \`lsof -i :${streamPort}\` and kill the pid)`,
+          );
+        }
+        throw streamError;
+      }
+
+      try {
+        fs.writeFileSync(getPidFilePath(), String(process.pid), "utf8");
+      } catch {
+        // non-fatal: pidfile is a convenience
+      }
+      this.installShutdownHandlers(socketPath);
 
     } catch (error) {
       if (this.server) {
@@ -107,6 +155,27 @@ export class AmuxServer {
       await fs.promises.rm(socketPath, { force: true });
       throw error;
     }
+  }
+
+  private shutdownInstalled = false;
+  private installShutdownHandlers(socketPath: string): void {
+    if (this.shutdownInstalled) return;
+    this.shutdownInstalled = true;
+    const cleanup = (): void => {
+      try {
+        fs.rmSync(getPidFilePath(), { force: true });
+      } catch { /* ignore */ }
+      try {
+        fs.rmSync(socketPath, { force: true });
+      } catch { /* ignore */ }
+    };
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+      process.once(signal, () => {
+        cleanup();
+        process.exit(0);
+      });
+    }
+    process.once("exit", cleanup);
   }
 
   private isAttachMessage(request: ApiRequest | AttachMessage): request is AttachMessage {
@@ -178,6 +247,7 @@ export class AmuxServer {
       this.server?.close((error) => (error ? reject(error) : resolve()));
     });
     await fs.promises.rm(socketPath, { force: true });
+    await fs.promises.rm(getPidFilePath(), { force: true });
     this.server = null;
     this.streamServer = null;
   }

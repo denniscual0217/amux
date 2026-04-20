@@ -7,7 +7,7 @@ import process from "node:process";
 import { WebSocket } from "ws";
 import { getDefaultShell } from "./core.js";
 import { renderTuiScreenshot, writeScreenshotPng } from "./screenshot.js";
-import { getSocketPath, getStreamPortFromConfig, startServer } from "./server.js";
+import { getPidFilePath, getSocketPath, getStreamPortFromConfig, readDaemonPid, startServer } from "./server.js";
 import { ApiRequest, ApiResponse, SessionSnapshot, StreamMessage } from "./types.js";
 import type { PaneScreenSnapshot } from "./core.js";
 
@@ -234,6 +234,14 @@ async function main(): Promise<void> {
     const isDaemon = args.includes("-d") || args.includes("--daemon");
 
     if (isDaemon) {
+      const existing = readDaemonPid();
+      if (existing) {
+        console.error(
+          `amux daemon already running (pid ${existing}) — run \`amux stop\` to terminate it first`,
+        );
+        process.exit(1);
+      }
+
       // Spawn detached background process
       const cliPath = process.argv[1];
       const child = spawn(process.execPath, [cliPath, "start"], {
@@ -254,7 +262,16 @@ async function main(): Promise<void> {
           await new Promise((r) => setTimeout(r, 200));
         }
       }
-      console.error("amux daemon failed to start");
+      const stalePid = readDaemonPid();
+      if (stalePid) {
+        console.error(
+          `amux daemon spawned (pid ${stalePid}) but socket isn't responding — run \`amux stop\` and try again`,
+        );
+      } else {
+        console.error(
+          "amux daemon failed to start (port 7777 may be in use — check with `lsof -i :7777`)",
+        );
+      }
       process.exit(1);
     }
 
@@ -287,19 +304,35 @@ async function main(): Promise<void> {
 
   if (command === "stop") {
     const socketPath = getSocketPath();
+    const pidFromFile = readDaemonPid();
+    const fsMod = await import("node:fs");
+    let stopped = false;
     try {
-      await send({ cmd: "list" }); // check if running
-      const fs = await import("node:fs");
-      // Find and kill the daemon process
+      await send({ cmd: "list" });
       const { execSync } = await import("node:child_process");
       try {
         execSync(`fuser -k ${socketPath} 2>/dev/null`, { stdio: "ignore" });
       } catch { /* ignore */ }
-      try { fs.unlinkSync(socketPath); } catch { /* ignore */ }
-      console.log("amux stopped");
+      stopped = true;
     } catch {
-      console.log("amux is not running");
+      // socket unreachable — fall through to pidfile
     }
+
+    if (!stopped && pidFromFile) {
+      try {
+        process.kill(pidFromFile, "SIGTERM");
+        // give it a moment to clean up
+        await new Promise((r) => setTimeout(r, 300));
+        stopped = true;
+      } catch {
+        // process may already be dead
+      }
+    }
+
+    try { fsMod.unlinkSync(socketPath); } catch { /* ignore */ }
+    try { fsMod.unlinkSync(getPidFilePath()); } catch { /* ignore */ }
+
+    console.log(stopped ? "amux stopped" : "amux is not running");
     return;
   }
 
