@@ -76,8 +76,8 @@ jobs:
             5. After all inline comments are posted, post a single
                top-level summary comment (via `gh pr comment`) that
                references the already-posted inline findings, grouped
-               into two sections: **Recommended items to check** (for
-               critical or high-impact issues) and **Others** (for
+               into two sections: **Recommended to check** (for
+               critical or high-impact issues) and **Nice to check** (for
                everything else).
 
             ## Mandatory inline comments
@@ -111,11 +111,11 @@ jobs:
             of what the PR does and the overall verdict. Then list
             findings under two H3 sections:
 
-            - `### Recommended items to check` — findings that are
+            - `### Recommended to check` — findings that are
               critical or high-impact (bugs, security issues, data loss,
               broken behavior, significant perf regressions). These are
               things a reviewer should address before merging.
-            - `### Others` — everything else (style nits, minor
+            - `### Nice to check` — everything else (style nits, minor
               refactors, low-impact suggestions, optional improvements).
 
             Omit either section if it has no findings. Each bullet must
@@ -176,7 +176,7 @@ jobs:
 
             Formatting rules:
             - Use exactly these two H3 headings when findings exist:
-              `### Recommended items to check` and `### Others`.
+              `### Recommended to check` and `### Nice to check`.
             - Each finding is a single `-` bullet.
             - First sentence of each bullet: **bolded short title** — then
               the file path and line(s).
