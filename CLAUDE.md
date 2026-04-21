@@ -10,7 +10,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm link` after `build` to expose the `amux` binary globally (entry: `dist/cli.js`).
 - Runtime requires Node.js 22+ and git 2.5+. Source is ESM with `"module": "Node16"` — intra-repo imports must use the `.js` extension even in `.ts` files.
 
-There is no lint step and no unit test suite. The CI workflow (`.github/workflows/claude-code-review.yml`) is an AI code review, not a build gate.
+There is no lint step and no unit test suite. Two AI-powered code review workflows run on pull requests, neither is a build gate:
+
+- `.github/workflows/claude-code-review.yml` — Claude (Anthropic) review, triggered automatically on PRs and on comments containing `@claude`.
+- `.github/workflows/codex-code-review.yml` — OpenAI Codex review, triggered automatically on PRs and on comments containing `@codex`.
 
 ## Architecture
 
