@@ -70,7 +70,7 @@ jobs:
       - name: Validate OpenAI API key
         shell: bash
         env:
-          CODEX_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.OPEN_API_KEY }}
+          CODEX_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if [[ -z "$CODEX_OPENAI_API_KEY" ]]; then
             echo "::error::Set an Actions secret named OPENAI_API_KEY before running Codex review."
