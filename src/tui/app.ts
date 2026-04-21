@@ -642,7 +642,7 @@ export class TuiApp {
         this.toggleSidebarFocus();
         return;
       case "literal-input":
-        if (this.sidebar.focused) {
+        if (this.sidebar.focused || this.rightSidebar.focused) {
           return;
         }
         if (this.copyMode.active) {
