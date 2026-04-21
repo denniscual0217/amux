@@ -833,15 +833,19 @@ export class TuiApp {
     const lines = this.paneBuffers.get(this.currentWindow().activePaneIdValue ?? 0)?.lines ?? [];
     switch (chunk) {
       case "\u001b[A":
+      case "k":
         this.copyMode.move(lines, -1, 0);
         break;
       case "\u001b[B":
+      case "j":
         this.copyMode.move(lines, 1, 0);
         break;
       case "\u001b[C":
+      case "l":
         this.copyMode.move(lines, 0, 1);
         break;
       case "\u001b[D":
+      case "h":
         this.copyMode.move(lines, 0, -1);
         break;
       case "\u001b[5~":
@@ -850,10 +854,39 @@ export class TuiApp {
       case "\u001b[6~":
         this.copyMode.page(lines, 1, 10);
         break;
+      case "\u0004": // Ctrl-D
+        this.copyMode.page(lines, 1, 5);
+        break;
+      case "\u0015": // Ctrl-U
+        this.copyMode.page(lines, -1, 5);
+        break;
+      case "\u0005": // Ctrl-E
+        this.copyMode.scroll(lines, 1);
+        break;
+      case "\u0019": // Ctrl-Y
+        this.copyMode.scroll(lines, -1);
+        break;
+      case "g":
+        this.copyMode.move(lines, -lines.length, -this.copyMode.cursor.column);
+        break;
+      case "G":
+        this.copyMode.move(lines, lines.length, -this.copyMode.cursor.column);
+        break;
+      case "0":
+        this.copyMode.move(lines, 0, -this.copyMode.cursor.column);
+        break;
+      case "$": {
+        const line = lines[this.copyMode.cursor.line] ?? "";
+        this.copyMode.move(lines, 0, line.length - this.copyMode.cursor.column);
+        break;
+      }
       case " ":
+      case "v":
         this.copyMode.toggleSelection();
         break;
       case "\r":
+      case "\n":
+      case "y":
         this.copyMode.copy(lines);
         this.message = this.copyMode.clipboardOk ? "copied to clipboard" : "copied to internal buffer";
         this.copyMode.exit();

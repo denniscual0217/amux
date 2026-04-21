@@ -201,6 +201,8 @@ export class KeyBindingHandler extends EventEmitter {
         this.emit("action", { type: "session-picker" } satisfies TuiAction);
         return;
       case "[":
+      case "\r":
+      case "\n":
         this.emit("action", { type: "copy-mode" } satisfies TuiAction);
         return;
       case "\u001b[A":

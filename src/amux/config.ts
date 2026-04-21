@@ -115,7 +115,7 @@ function getDefaults(): AmuxConfig {
     popupBindings: [
       { key: "g", command: "claude --dangerously-skip-permissions", label: "claude" },
       { key: "x", command: "codex --dangerously-bypass-approvals-and-sandbox", label: "codex" },
-      { key: "l", command: "lazygit", label: "lazygit", hideInSidebar: true, reuseByRepo: true },
+      { key: "i", command: "lazygit", label: "lazygit", hideInSidebar: true, reuseByRepo: true },
     ],
   };
 }

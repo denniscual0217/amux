@@ -119,14 +119,28 @@ The sidebar is a real layout column — panes resize when it toggles.
 | `Ctrl+B $` | Rename session |
 | `Ctrl+B w` | Window picker (`j`/`k` or arrows to navigate, `Enter` to select) |
 | `Ctrl+B s` | Session picker |
-| `Ctrl+B [` | Enter copy mode |
-| `Ctrl+B g` / `x` / `l` | Toggle configured popup panes (defaults: claude / codex / lazygit) |
-| `Ctrl+B G` / `X` / `L` | Spawn a **new** instance of that popup's binding |
+| `Ctrl+B [` / `Enter` | Enter copy mode |
+| `Ctrl+B g` / `x` / `i` | Toggle configured popup panes (defaults: claude / codex / lazygit) |
+| `Ctrl+B G` / `X` / `I` | Spawn a **new** instance of that popup's binding |
 | `Ctrl+B F` | Toggle fullscreen for the visible popup |
 | `Ctrl+B K` | Kill the visible popup pane |
 | `Ctrl+B B` | Toggle the right sidebar (popup list) |
 | `Ctrl+B r` | Focus the right sidebar (press again to collapse) |
 | `Ctrl+B ]` / `{` | Cycle to next / previous popup |
+
+### Copy Mode (vim-style)
+
+Enter with `Ctrl+B [` or `Ctrl+B Enter`. Exit with `q` or `Escape`.
+
+| Key | Action |
+|-----|--------|
+| `h` / `j` / `k` / `l` (or arrows) | Move cursor |
+| `Ctrl+D` / `Ctrl+U` | Half-page down / up |
+| `Ctrl+E` / `Ctrl+Y` | Scroll one line down / up |
+| `g` / `G` | Jump to top / bottom |
+| `0` / `$` | Line start / end |
+| `v` (or Space) | Toggle visual selection |
+| `y` (or Enter) | Yank selection to clipboard and exit |
 
 ### Popup Panes
 
@@ -185,7 +199,7 @@ Local state automatically gitignored by `init`. Stores `{ name, path, branch, cr
   "popupBindings": [
     { "key": "g", "command": "claude --dangerously-skip-permissions", "label": "claude" },
     { "key": "x", "command": "codex --dangerously-bypass-approvals-and-sandbox", "label": "codex" },
-    { "key": "l", "command": "lazygit", "label": "lazygit" }
+    { "key": "i", "command": "lazygit", "label": "lazygit" }
   ]
 }
 ```
