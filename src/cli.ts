@@ -44,6 +44,7 @@ function printUsage(): void {
       "  amux write <session> <data>                     Send text input to session",
       "  amux send-keys <session> <key> [<key>...]       Send keypresses (Enter, C-c, Escape, Tab, Space, ...)",
       "  amux kill <session>                           Kill a session",
+      "  amux worktree <sub>                           Manage git worktrees (see `amux worktree help`)",
       "  amux help                                     Show this help",
     ].join("\n"),
   );
@@ -204,6 +205,121 @@ async function handleDefaultAttach(): Promise<void> {
   await attachSession(initial.name);
 }
 
+async function handleWorktreeCommand(args: string[]): Promise<void> {
+  const sub = args.shift();
+  if (!sub || sub === "help" || sub === "--help" || sub === "-h") {
+    printWorktreeUsage();
+    return;
+  }
+
+  const { initProject, addWorktree, removeWorktree, listWorktrees } =
+    await import("./worktree/ops.js");
+  const { findEntry } = await import("./worktree/registry.js");
+  const { loadProjectConfig } = await import("./worktree/config.js");
+
+  if (sub === "init") {
+    const force = takeFlag(args, "--force");
+    const res = await initProject(process.cwd(), force);
+    if (res.created) {
+      console.log(`wrote ${path.relative(process.cwd(), res.configPath) || res.configPath}`);
+    } else {
+      console.log(
+        `${path.relative(process.cwd(), res.configPath) || res.configPath} already exists (use --force to overwrite)`,
+      );
+    }
+    return;
+  }
+
+  if (sub === "list") {
+    const entries = await listWorktrees(process.cwd());
+    if (entries.length === 0) {
+      console.log("no worktrees registered");
+      return;
+    }
+    for (const e of entries) {
+      console.log(`${e.name}\t${e.branch}\t${e.path}`);
+    }
+    return;
+  }
+
+  if (sub === "add") {
+    const prArg = takeOption(args, ["--pr"]);
+    const nameArg = takeOption(args, ["--name"]);
+    if (prArg) {
+      const prNumber = Number.parseInt(prArg, 10);
+      if (Number.isNaN(prNumber)) throw new Error("--pr must be a number");
+      const { entry } = await addWorktree(process.cwd(), { prNumber, name: nameArg });
+      console.log(`created ${entry.path} (branch ${entry.branch})`);
+      return;
+    }
+    const branch = args.shift();
+    if (!branch) throw new Error("worktree add requires <branch> or --pr <number>");
+    const { entry } = await addWorktree(process.cwd(), { branch, name: nameArg });
+    console.log(`created ${entry.path} (branch ${entry.branch})`);
+    return;
+  }
+
+  if (sub === "remove" || sub === "rm") {
+    const force = takeFlag(args, "--force");
+    const all = takeFlag(args, "--all");
+    const name = all ? undefined : args.shift();
+    const res = await removeWorktree(process.cwd(), { name, all, force });
+    for (const e of res.removed) console.log(`removed ${e.name} (${e.path})`);
+    for (const s of res.skipped) console.log(`skipped ${s.entry.name}: ${s.reason}`);
+    if (res.skipped.length > 0 && res.removed.length === 0) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (sub === "open") {
+    const name = args.shift();
+    if (!name) throw new Error("worktree open requires <name>");
+    const config = await loadProjectConfig(process.cwd());
+    const entry = findEntry(config.projectRoot, name);
+    if (!entry) throw new Error(`worktree "${name}" not found in amux registry`);
+    if (!fs.existsSync(entry.path)) {
+      throw new Error(`worktree path no longer exists: ${entry.path}`);
+    }
+    await ensureServerRunning();
+    try {
+      await send({ cmd: "get-session", session: entry.name });
+    } catch {
+      await send({
+        cmd: "create-session",
+        session: entry.name,
+        exec: getDefaultShell(),
+        cwd: entry.path,
+      });
+    }
+    if (process.stdout.isTTY) {
+      await attachSession(entry.name);
+    } else {
+      console.log(`session ${entry.name} ready at ${entry.path}`);
+    }
+    return;
+  }
+
+  throw new Error(`unknown worktree subcommand: ${sub}`);
+}
+
+function printWorktreeUsage(): void {
+  console.log(
+    [
+      "amux worktree — manage git worktrees",
+      "",
+      "Usage:",
+      "  amux worktree init [--force]            Write .amux.yaml in the repo root",
+      "  amux worktree add <branch> [--name N]   Create a worktree + branch",
+      "  amux worktree add --pr <number>         Check out an existing GitHub PR as a worktree",
+      "  amux worktree open <name>               Create/attach an amux session at the worktree",
+      "  amux worktree remove <name> [--force]   Remove a worktree (fails on dirty)",
+      "  amux worktree remove --all [--force]    Remove every amux-managed worktree",
+      "  amux worktree list                      List amux-managed worktrees",
+    ].join("\n"),
+  );
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const command = args.shift();
@@ -362,6 +478,11 @@ async function main(): Promise<void> {
       throw new Error("--pane must be a number");
     }
     await streamSession(session, pane);
+    return;
+  }
+
+  if (command === "worktree") {
+    await handleWorktreeCommand(args);
     return;
   }
 
