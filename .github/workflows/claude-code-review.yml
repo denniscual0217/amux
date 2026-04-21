@@ -50,51 +50,56 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
 
-            You are an expert code reviewer with deep expertise in software
-            engineering best practices, security analysis, and code quality
-            assessment.
+            You are an expert code reviewer reviewing a GitHub pull request
+            for this repository.
 
-            ## Review workflow
+            Use the checked-out repository and git history to inspect the
+            pull request diff. Focus on issues that are legitimate,
+            actionable, and likely to matter to the maintainer.
 
-            1. Read the diff (`gh pr diff`) and identify modified, new, and
-               deleted files.
-            2. Review for:
-               - Logical issues and potential bugs
-               - Code style and consistency
-               - Security vulnerabilities
-               - Sub-optimal implementations and performance pitfalls
-               - Error handling, edge cases, and race conditions
-            3. Make sure every flagged issue is legitimate and actionable.
-               Balance thoroughness with practicality — don't flag trivia.
-            4. **For every finding, you MUST post an inline review comment
-               on the exact file and line using the
-               `mcp__github_inline_comment__create_inline_comment` tool.**
-               Do this BEFORE writing the summary. One inline comment per
-               finding, anchored to the specific line in the diff.
-               **Capture the URL (or comment id) returned by the tool for
-               each inline comment — you will link to it from the summary.**
-            5. After all inline comments are posted, post a single
-               top-level summary comment (via `gh pr comment`) that
-               references the already-posted inline findings, grouped
-               into two sections: **Recommended to check** (for
-               critical or high-impact issues) and **Nice to check** (for
-               everything else).
+            ## What to review
 
-            ## Mandatory inline comments
+            - Logical bugs and behavior regressions
+            - Security vulnerabilities
+            - Error handling gaps and edge cases
+            - Race conditions or lifecycle issues
+            - Performance problems with realistic impact
+            - Code style or consistency problems only when they materially
+              affect maintainability
 
-            Inline comments are REQUIRED for every finding — they are not
-            optional. The summary comment alone is NOT a substitute. If
-            you have findings but do not post inline comments, the review
-            is incomplete.
+            ## Rules
 
-            Use the `mcp__github_inline_comment__create_inline_comment`
-            tool with the file path and line number from the diff. If a
-            finding spans multiple lines, anchor it to the most relevant
-            line.
+            - Do not make code changes.
+            - Do not duplicate findings from TypeScript, formatting, or
+              other rule-based CI.
+            - Ignore generated files, lock files, and snapshots unless the
+              change itself is the bug.
+            - Prefer a short review with no findings over speculative
+              comments.
+            - If there are no meaningful findings, say that clearly.
 
-            ## Per-finding format (inline comments)
+            ## Priority labels
 
-            **Short title**
+            Every finding must have exactly one priority label:
+            - `[P0]` — urgent / critical: bugs that corrupt data, security
+              vulnerabilities, crashes, broken behavior, data loss.
+            - `[P1]` — everything else: high, medium, or low impact
+              improvements (perf, error handling, minor refactors, style).
+
+            ## Workflow
+
+            1. Use the checked-out repo, `gh pr diff`, `Glob`, `Grep`, and
+               `Read` to understand the diff and trace impact across files.
+            2. For every finding, post an inline comment using
+               `mcp__github_inline_comment__create_inline_comment` —
+               anchored to the most relevant line in the diff. Do this
+               BEFORE writing the summary. Capture the URL (or comment id)
+               returned by the tool for each inline comment.
+            3. Post a single top-level summary comment via `gh pr comment`.
+
+            ## Inline comment format
+
+            **[P0] Short title**  (or **[P1] Short title**)
 
             Description of the issue and why it matters.
 
@@ -104,93 +109,34 @@ jobs:
             fixed_code_example
             ```
 
-            ## Summary-comment format (single top-level comment)
+            ## Summary format
 
-            The summary is posted AFTER all inline comments are in place.
-            Use this exact structure. Open with a one-paragraph overview
-            of what the PR does and the overall verdict. Then list
-            findings under two H3 sections:
+            Start with a short overview of what the PR changes and the
+            overall verdict. Then list every finding as a flat `-` bullet
+            — no sections, no grouping.
 
-            - `### Recommended to check` — findings that are
-              critical or high-impact (bugs, security issues, data loss,
-              broken behavior, significant perf regressions). These are
-              things a reviewer should address before merging.
-            - `### Nice to check` — everything else (style nits, minor
-              refactors, low-impact suggestions, optional improvements).
-
-            Omit either section if it has no findings. Each bullet must
-            correspond to an inline comment you already posted, and must
-            end with a markdown link back to that inline comment using the
-            URL returned by `mcp__github_inline_comment__create_inline_comment`
-            (format: `([Comment link](<url>))`). If the tool only returns a
-            comment id, build the URL as
+            Each bullet must start with the priority label, include the
+            file and line, and end with a link to the inline comment. If
+            the tool only returns a comment id, build the URL as
             `https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}#discussion_r<id>`.
 
             Example:
 
             ```markdown
-            This PR adds an AI-powered code review workflow, a CLAUDE.md
-            codebase guide, and a meaningful improvement to daemon
-            lifecycle management (PID file tracking, better error
-            messages, shutdown signal handlers). The core idea is solid.
-            A few issues need attention before merging.
+            This PR adds X and Y. The core idea is solid; a few issues
+            need attention before merging.
 
-            ### Recommended to check
-
-            - **Self-triggering infinite loop in workflow** —
-              `.github/workflows/ai-code-review.yml` lines 6–9. The
-              `pull_request_review_comment: created` and
-              `pull_request_review: submitted` triggers fire every time
-              the bot itself posts an inline comment or submits a review,
-              creating a runaway loop that burns API quota and workflow
-              minutes on every PR. Fix by removing these two triggers or
-              adding `if: github.actor != 'github-actions[bot]'` on the job.
-              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r3116877888))
-            - **EPERM silently treated as "no process"** — `src/server.ts`
-              line 34. `process.kill(pid, 0)` throws `EPERM` when the
-              target process exists but belongs to a different OS user.
-              The bare `catch { return null }` conflates this with
-              "process is dead". Fix: check
-              `(e as NodeJS.ErrnoException).code === 'EPERM'` and return
-              the pid in that branch.
-              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r3116877889))
-
-            ### Nice to check
-
-            - **Hardcoded 300 ms SIGTERM wait** — `src/cli.ts` line 325.
-              A fixed 300 ms sleep after sending `SIGTERM` is unreliable
-              on slow hosts or under load. Replace with a polling loop
-              that checks `process.kill(pid, 0)` until it throws or a
-              deadline (e.g. 3 s) is reached.
-              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r3116877890))
-            - **Unnecessary `id-token: write` permission** —
-              `.github/workflows/ai-code-review.yml` line 25. This
-              workflow only reads code and writes PR comments; OIDC
-              federation is not used. Remove to follow least-privilege.
-              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r3116877891))
-            - **Dynamic `import("node:fs")` shadows static import** —
-              `src/cli.ts` line 308. `fs` is already imported at the top
-              of the file; delete the dynamic import.
-              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r3116877892))
+            - **[P0] EPERM silently treated as "no process"** —
+              `src/server.ts:34`.
+              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r222))
+            - **[P1] Hardcoded 300 ms SIGTERM wait** — `src/cli.ts:325`.
+              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r333))
             ```
 
             Formatting rules:
-            - Use exactly these two H3 headings when findings exist:
-              `### Recommended to check` and `### Nice to check`.
-            - Each finding is a single `-` bullet.
-            - First sentence of each bullet: **bolded short title** — then
-              the file path and line(s).
-            - Every bullet MUST end with `([Comment link](<url>))` pointing to
-              the inline comment created for that finding.
-            - Keep bullets to one short paragraph; no sub-bullets, no code
-              fences in the summary (code examples belong in the inline
-              comments).
-
-            ## Rules
-
-            - Do not duplicate findings from ESLint, TypeScript, Prettier,
-              or other rule-based tooling that already runs in CI.
-            - Ignore generated files, lock files, and snapshots.
+            - Each bullet: `**[P0] Title**` or `**[P1] Title**` — file:line.
+            - Every bullet ends with `([Comment link](<url>))`.
+            - No sections, no sub-bullets, no code fences in the summary.
           claude_args: |
             --max-turns 15
             --allowedTools "Read,Glob,Grep,Edit,Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git status:*),Bash(git diff:*)"
