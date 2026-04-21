@@ -485,7 +485,12 @@ export class TerminalRenderer {
       screen.push(`${move(boxY + boxHeight - 1, boxX)}${BORDER_OVERLAY}${bottomBorder}\u001B[0m`);
     }
 
-    if (state.message) {
+    if (state.copyMode.active) {
+      const label = " -- SCROLL MODE --  v: select  y: yank  q: exit ";
+      screen.push(
+        `${move(Math.max(1, statusRow - 1), 1)}\u001B[48;5;220m\u001B[30m${trimVisible(label, this.width)}\u001B[0m`,
+      );
+    } else if (state.message) {
       screen.push(
         `${move(Math.max(1, statusRow - 1), 1)}\u001B[48;5;238m${trimVisible(state.message, this.width)}\u001B[0m`,
       );

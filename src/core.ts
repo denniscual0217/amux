@@ -19,9 +19,11 @@ import type {
 import { loadConfig } from "./amux/config.js";
 
 const ANSI_PATTERN =
-  // Matches common CSI/OSC/control-sequence patterns well enough for agent output cleanup.
+  // OSC sequences (BEL- or ST-terminated) are matched first so their `]`
+  // isn't swallowed by the CSI char class — otherwise shell integration
+  // markers like OSC 133 (semantic prompts) leak their body as visible text.
   // eslint-disable-next-line no-control-regex
-  /[\u001B\u009B][[\]()#;?]*(?:(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]|(?:].*?(?:\u0007|\u001B\\)))/g;
+  /\u001B\][\s\S]*?(?:\u0007|\u001B\\)|[\u001B\u009B][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]/g;
 
 interface PaneLayoutLeaf {
   type: "pane";

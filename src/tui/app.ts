@@ -882,6 +882,7 @@ export class TuiApp {
       }
       case " ":
       case "v":
+      case "V":
         this.copyMode.toggleSelection();
         break;
       case "\r":
