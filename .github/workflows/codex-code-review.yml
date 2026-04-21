@@ -67,11 +67,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
 
+      - name: Validate OpenAI API key
+        shell: bash
+        env:
+          CODEX_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.OPEN_API_KEY }}
+        run: |
+          if [[ -z "$CODEX_OPENAI_API_KEY" ]]; then
+            echo "::error::Set an Actions secret named OPENAI_API_KEY before running Codex review."
+            exit 1
+          fi
+
       - name: Run Codex review
         id: run_codex
         uses: openai/codex-action@v1
         with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY || secrets.OPEN_API_KEY }}
           prompt: |
             Review PR #${{ steps.pr.outputs.number }} in ${{ github.repository }}.
 
