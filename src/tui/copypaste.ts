@@ -152,7 +152,12 @@ export class CopyModeState {
       for (let lineIndex = selection.start.line; lineIndex <= selection.end.line; lineIndex += 1) {
         const line = lines[lineIndex] ?? "";
         const startColumn = lineIndex === selection.start.line ? selection.start.column : 0;
-        const endColumn = lineIndex === selection.end.line ? selection.end.column : line.length;
+        // Inclusive of the character under the "end" cursor — matches vim's
+        // visual mode, where `vy` yanks the char at the cursor position.
+        const endColumn =
+          lineIndex === selection.end.line
+            ? Math.min(line.length, selection.end.column + 1)
+            : line.length;
         chunks.push(line.slice(startColumn, endColumn));
       }
       this.copiedText = chunks.join("\n");

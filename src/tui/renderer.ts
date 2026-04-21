@@ -408,7 +408,12 @@ export class TerminalRenderer {
 
             const sourceLine = copyPlainLines[lineIndex] ?? "";
             const startColumn = lineIndex === selection.start.line ? selection.start.column : 0;
-            const endColumn = lineIndex === selection.end.line ? selection.end.column : sourceLine.length;
+            // Inclusive end so the char under the cursor is highlighted the
+            // moment `v` is pressed (vim visual-mode semantics).
+            const endColumn =
+              lineIndex === selection.end.line
+                ? Math.min(sourceLine.length, selection.end.column + 1)
+                : sourceLine.length;
             const text = trimVisible(
               sourceLine.slice(startColumn, endColumn),
               Math.max(0, endColumn - startColumn),
