@@ -22,6 +22,15 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+function isWordChar(ch: string | undefined): boolean {
+  if (ch === undefined || ch === "") return false;
+  return /[A-Za-z0-9_]/.test(ch);
+}
+
+function isBlankLine(line: string | undefined): boolean {
+  return (line ?? "").trim().length === 0;
+}
+
 function normalize(selection: CopySelection): CopySelection {
   const startBeforeEnd =
     selection.start.line < selection.end.line ||
@@ -107,6 +116,98 @@ export class CopyModeState {
   public scroll(delta: number): void {
     const maxOffset = Math.max(0, this.plainLines.length - 1);
     this.scrollOffset = clamp(this.scrollOffset + delta, 0, maxOffset);
+  }
+
+  public moveWordForward(): void {
+    const pos = { line: this.cursor.line, column: this.cursor.column };
+    while (isWordChar(this.charAt(pos.line, pos.column))) {
+      if (!this.advance(pos)) return this.commitCursor(pos);
+    }
+    while (!isWordChar(this.charAt(pos.line, pos.column))) {
+      if (!this.advance(pos)) return this.commitCursor(pos);
+    }
+    this.commitCursor(pos);
+  }
+
+  public moveWordEnd(): void {
+    const pos = { line: this.cursor.line, column: this.cursor.column };
+    if (!this.advance(pos)) return this.commitCursor(pos);
+    while (!isWordChar(this.charAt(pos.line, pos.column))) {
+      if (!this.advance(pos)) return this.commitCursor(pos);
+    }
+    while (isWordChar(this.charAt(pos.line, pos.column + 1))) {
+      pos.column += 1;
+    }
+    this.commitCursor(pos);
+  }
+
+  public moveWordBackward(): void {
+    const pos = { line: this.cursor.line, column: this.cursor.column };
+    if (!this.retreat(pos)) return this.commitCursor(pos);
+    while (!isWordChar(this.charAt(pos.line, pos.column))) {
+      if (!this.retreat(pos)) return this.commitCursor(pos);
+    }
+    while (pos.column > 0 && isWordChar(this.charAt(pos.line, pos.column - 1))) {
+      pos.column -= 1;
+    }
+    this.commitCursor(pos);
+  }
+
+  public moveParagraphForward(): void {
+    let line = this.cursor.line;
+    while (line < this.plainLines.length - 1 && isBlankLine(this.plainLines[line])) line += 1;
+    while (line < this.plainLines.length - 1 && !isBlankLine(this.plainLines[line])) line += 1;
+    this.commitCursor({ line, column: 0 });
+  }
+
+  public moveParagraphBackward(): void {
+    let line = this.cursor.line;
+    while (line > 0 && isBlankLine(this.plainLines[line])) line -= 1;
+    while (line > 0 && !isBlankLine(this.plainLines[line])) line -= 1;
+    this.commitCursor({ line, column: 0 });
+  }
+
+  private charAt(line: number, column: number): string | undefined {
+    if (column < 0) return undefined;
+    return this.plainLines[line]?.[column];
+  }
+
+  private advance(pos: { line: number; column: number }): boolean {
+    const lineText = this.plainLines[pos.line] ?? "";
+    if (pos.column + 1 < lineText.length) {
+      pos.column += 1;
+      return true;
+    }
+    if (pos.line + 1 < this.plainLines.length) {
+      pos.line += 1;
+      pos.column = 0;
+      return true;
+    }
+    return false;
+  }
+
+  private retreat(pos: { line: number; column: number }): boolean {
+    if (pos.column > 0) {
+      pos.column -= 1;
+      return true;
+    }
+    if (pos.line > 0) {
+      pos.line -= 1;
+      pos.column = Math.max(0, (this.plainLines[pos.line]?.length ?? 1) - 1);
+      return true;
+    }
+    return false;
+  }
+
+  private commitCursor(pos: { line: number; column: number }): void {
+    const maxLine = Math.max(0, this.plainLines.length - 1);
+    const line = clamp(pos.line, 0, maxLine);
+    const lineLength = this.plainLines[line]?.length ?? 0;
+    this.cursor = {
+      line,
+      column: clamp(pos.column, 0, Math.max(0, lineLength)),
+    };
+    this.ensureCursorVisible();
   }
 
   /**

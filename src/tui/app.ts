@@ -893,6 +893,21 @@ export class TuiApp {
         this.copyMode.move(0, line.length - this.copyMode.cursor.column);
         break;
       }
+      case "w":
+        this.copyMode.moveWordForward();
+        break;
+      case "e":
+        this.copyMode.moveWordEnd();
+        break;
+      case "b":
+        this.copyMode.moveWordBackward();
+        break;
+      case "}":
+        this.copyMode.moveParagraphForward();
+        break;
+      case "{":
+        this.copyMode.moveParagraphBackward();
+        break;
       case " ":
       case "v":
       case "V":
