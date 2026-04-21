@@ -331,11 +331,21 @@ export class TerminalRenderer {
       const buffer = state.paneBuffers.get(region.paneId) ?? { lines: [] };
       const paneScreen = state.paneScreens.get(region.paneId);
       const lines = buffer.lines;
-      const copyLines =
-        state.copyMode.active && isActive
-          ? lines.slice(0, Math.max(0, lines.length - state.copyMode.scrollOffset))
-          : lines;
-      const visibleLines = copyLines.slice(-innerHeight);
+      const inCopyMode = state.copyMode.active && isActive;
+      const copyPlainLines = inCopyMode
+        ? state.copyMode.plainLines.slice(
+            0,
+            Math.max(0, state.copyMode.plainLines.length - state.copyMode.scrollOffset),
+          )
+        : lines;
+      const copyDisplayLines = inCopyMode
+        ? state.copyMode.displayLines.slice(
+            0,
+            Math.max(0, state.copyMode.displayLines.length - state.copyMode.scrollOffset),
+          )
+        : lines;
+      const visibleLines = copyPlainLines.slice(-innerHeight);
+      const visibleDisplayLines = copyDisplayLines.slice(-innerHeight);
 
       const horizontalSpan = Math.max(0, region.width - 2);
       const topLine = `${BOX.topLeft}${BOX.horizontal.repeat(horizontalSpan)}${BOX.topRight}`;
@@ -357,14 +367,17 @@ export class TerminalRenderer {
       const titleText = rawTitle.slice(0, Math.max(1, innerWidth - 1));
       screen.push(`${move(region.y, region.x + 2)}${borderColor}${titleText}\u001B[0m`);
 
+      const padStyledLine = (line: string): string => {
+        const plain = stripAnsiForWidth(line);
+        if (plain.length >= innerWidth) {
+          return line;
+        }
+        return `${line}${" ".repeat(innerWidth - plain.length)}`;
+      };
+
       const normalLines =
-        paneScreen?.lines.slice(0, innerHeight).map((line) => {
-          const plain = stripAnsiForWidth(line);
-          if (plain.length >= innerWidth) {
-            return line;
-          }
-          return `${line}${" ".repeat(innerWidth - plain.length)}`;
-        }) ?? visibleLines.map((line) => trimVisible(line, innerWidth));
+        paneScreen?.lines.slice(0, innerHeight).map(padStyledLine) ??
+        visibleLines.map((line) => trimVisible(line, innerWidth));
 
       normalLines.forEach((line, index) => {
         const outputRow = region.y + 1 + index;
@@ -372,27 +385,28 @@ export class TerminalRenderer {
           return;
         }
 
-        const content =
-          state.copyMode.active && isActive ? trimVisible(visibleLines[index] ?? "", innerWidth) : line;
+        const content = inCopyMode
+          ? padStyledLine(visibleDisplayLines[index] ?? "")
+          : line;
         screen.push(`${move(outputRow, region.x + 1)}${content}`);
       });
 
-      if (state.copyMode.active && isActive) {
+      if (inCopyMode) {
         const selection = state.copyMode.getSelection();
         const cursorLine = clamp(
-          state.copyMode.cursor.line - Math.max(0, copyLines.length - innerHeight),
+          state.copyMode.cursor.line - Math.max(0, copyPlainLines.length - innerHeight),
           0,
           innerHeight - 1,
         );
         const cursorColumn = clamp(state.copyMode.cursor.column, 0, innerWidth - 1);
         if (selection) {
           for (let lineIndex = selection.start.line; lineIndex <= selection.end.line; lineIndex += 1) {
-            const visibleIndex = lineIndex - Math.max(0, copyLines.length - innerHeight);
+            const visibleIndex = lineIndex - Math.max(0, copyPlainLines.length - innerHeight);
             if (visibleIndex < 0 || visibleIndex >= innerHeight) {
               continue;
             }
 
-            const sourceLine = copyLines[lineIndex] ?? "";
+            const sourceLine = copyPlainLines[lineIndex] ?? "";
             const startColumn = lineIndex === selection.start.line ? selection.start.column : 0;
             const endColumn = lineIndex === selection.end.line ? selection.end.column : sourceLine.length;
             const text = trimVisible(
@@ -405,7 +419,7 @@ export class TerminalRenderer {
           }
         }
         screen.push(
-          `${move(region.y + 1 + cursorLine, region.x + 1 + cursorColumn)}\u001B[7m${trimVisible(copyLines[state.copyMode.cursor.line]?.[state.copyMode.cursor.column] ?? " ", 1)}\u001B[0m`,
+          `${move(region.y + 1 + cursorLine, region.x + 1 + cursorColumn)}\u001B[7m${trimVisible(copyPlainLines[state.copyMode.cursor.line]?.[state.copyMode.cursor.column] ?? " ", 1)}\u001B[0m`,
         );
       } else if (isActive && paneScreen) {
         const cursorRow = clamp(paneScreen.cursor.row, 0, innerHeight - 1);

@@ -10,6 +10,14 @@ export interface CopySelection {
   end: CopyCursor;
 }
 
+export interface CopyModeEnterOptions {
+  plainLines: string[];
+  displayLines?: string[];
+  initialCursor?: CopyCursor;
+  /** Number of rows visible in the pane. Used to keep the cursor in view when moving. */
+  viewportRows?: number;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -48,11 +56,28 @@ export class CopyModeState {
   public selectionStart: CopyCursor | null = null;
   public copiedText = "";
   public clipboardOk = false;
+  /** Plain-text lines used for cursor math, selection boundaries, and clipboard copy. */
+  public plainLines: string[] = [];
+  /** Styled lines (ANSI preserved) used by the renderer — same length as plainLines. */
+  public displayLines: string[] = [];
+  /** Viewport height (pane rows). Used to auto-scroll so the cursor stays visible. */
+  public viewportRows = 0;
 
-  public enter(lines: string[]): void {
+  public enter(options: CopyModeEnterOptions): void {
+    const { plainLines, displayLines, initialCursor, viewportRows } = options;
     this.active = true;
     this.scrollOffset = 0;
-    this.cursor = { line: Math.max(0, lines.length - 1), column: 0 };
+    this.plainLines = plainLines;
+    this.displayLines = displayLines ?? plainLines;
+    this.viewportRows = viewportRows ?? 0;
+    const defaultCursor: CopyCursor = { line: Math.max(0, plainLines.length - 1), column: 0 };
+    const candidate = initialCursor ?? defaultCursor;
+    const lineIndex = clamp(candidate.line, 0, Math.max(0, plainLines.length - 1));
+    const lineLength = plainLines[lineIndex]?.length ?? 0;
+    this.cursor = {
+      line: lineIndex,
+      column: clamp(candidate.column, 0, lineLength),
+    };
     this.selectionStart = null;
     this.copiedText = "";
     this.clipboardOk = false;
@@ -61,23 +86,48 @@ export class CopyModeState {
   public exit(): void {
     this.active = false;
     this.selectionStart = null;
+    this.plainLines = [];
+    this.displayLines = [];
+    this.viewportRows = 0;
   }
 
-  public move(lines: string[], deltaLine: number, deltaColumn = 0): void {
+  public move(deltaLine: number, deltaColumn = 0): void {
+    const lines = this.plainLines;
     const maxLine = Math.max(0, lines.length - 1);
     this.cursor.line = clamp(this.cursor.line + deltaLine, 0, maxLine);
     const lineLength = lines[this.cursor.line]?.length ?? 0;
     this.cursor.column = clamp(this.cursor.column + deltaColumn, 0, Math.max(0, lineLength));
+    this.ensureCursorVisible();
   }
 
-  public page(lines: string[], delta: number, pageSize: number): void {
-    this.scroll(lines, delta * pageSize);
-    this.move(lines, delta * pageSize, 0);
+  public page(delta: number, pageSize: number): void {
+    this.move(delta * pageSize, 0);
   }
 
-  public scroll(lines: string[], delta: number): void {
-    const maxOffset = Math.max(0, lines.length - 1);
+  public scroll(delta: number): void {
+    const maxOffset = Math.max(0, this.plainLines.length - 1);
     this.scrollOffset = clamp(this.scrollOffset + delta, 0, maxOffset);
+  }
+
+  /**
+   * Shift scrollOffset so the cursor stays inside the visible viewport.
+   * Called after every move. Visible range (with `rows = viewportRows`) is
+   * `[total - rows - scrollOffset, total - 1 - scrollOffset]`.
+   */
+  private ensureCursorVisible(): void {
+    const rows = this.viewportRows;
+    if (rows <= 0) return;
+    const total = this.plainLines.length;
+    if (total === 0) return;
+
+    const bottomLine = total - 1 - this.scrollOffset;
+    const topLine = total - rows - this.scrollOffset;
+
+    if (this.cursor.line > bottomLine) {
+      this.scrollOffset = Math.max(0, total - 1 - this.cursor.line);
+    } else if (this.cursor.line < topLine) {
+      this.scrollOffset = Math.max(0, total - rows - this.cursor.line);
+    }
   }
 
   public toggleSelection(): void {
@@ -92,7 +142,8 @@ export class CopyModeState {
     return normalize({ start: this.selectionStart, end: this.cursor });
   }
 
-  public copy(lines: string[]): string {
+  public copy(): string {
+    const lines = this.plainLines;
     const selection = this.getSelection();
     if (!selection) {
       this.copiedText = lines[this.cursor.line] ?? "";

@@ -310,6 +310,17 @@ export interface PaneScreenSnapshot {
   cols: number;
 }
 
+export interface CopyModeSnapshot {
+  /** Plain-text version of each buffer line (scrollback + viewport). */
+  plainLines: string[];
+  /** Styled version of each buffer line — same indexing as plainLines. */
+  displayLines: string[];
+  /** Absolute line / column where the cursor sits when copy mode starts. */
+  initialCursor: { line: number; column: number };
+  /** Viewport height (rows) so the renderer can anchor the cursor at bottom. */
+  viewportRows: number;
+}
+
 function isInteractiveShellCommand(command: string, shell: string): boolean {
   const normalized = command.trim();
   return normalized === shell || normalized === `exec ${shell}`;
@@ -670,6 +681,40 @@ export class Pane extends EventEmitter {
       },
       rows: this.screen.rows,
       cols: this.screen.cols,
+    };
+  }
+
+  /**
+   * Snapshot the full xterm buffer (scrollback + viewport) for copy mode so
+   * the TUI renders the same styled view the user sees in the pane, and can
+   * scroll back through history. `initialCursor` marks the absolute line/col
+   * of the terminal cursor at the moment copy mode is entered.
+   */
+  public getCopyModeSnapshot(): CopyModeSnapshot {
+    const buffer = this.screen.buffer.active;
+    const total = buffer.length;
+    const plainLines: string[] = [];
+    const displayLines: string[] = [];
+
+    for (let i = 0; i < total; i += 1) {
+      const styled = renderTerminalLine(i, this.screen);
+      displayLines.push(styled);
+      plainLines.push(stripAnsi(styled).replace(/\s+$/u, ""));
+    }
+
+    const absoluteCursorLine = Math.max(
+      0,
+      Math.min(total - 1, buffer.viewportY + buffer.cursorY),
+    );
+
+    return {
+      plainLines,
+      displayLines,
+      initialCursor: {
+        line: absoluteCursorLine,
+        column: Math.max(0, buffer.cursorX),
+      },
+      viewportRows: this.screen.rows,
     };
   }
 
