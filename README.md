@@ -120,12 +120,12 @@ The sidebar is a real layout column — panes resize when it toggles.
 | `Ctrl+B w` | Window picker (`j`/`k` or arrows to navigate, `Enter` to select) |
 | `Ctrl+B s` | Session picker |
 | `Ctrl+B [` | Enter copy mode |
-| `Ctrl+B g` / `x` | Toggle configured popup panes (default bindings) |
-| `Ctrl+B G` / `X` | Spawn a **new** instance of that popup's binding |
+| `Ctrl+B g` / `x` / `l` | Toggle configured popup panes (defaults: claude / codex / lazygit) |
+| `Ctrl+B G` / `X` / `L` | Spawn a **new** instance of that popup's binding |
 | `Ctrl+B F` | Toggle fullscreen for the visible popup |
 | `Ctrl+B K` | Kill the visible popup pane |
 | `Ctrl+B B` | Toggle the right sidebar (popup list) |
-| `Ctrl+B r` | Focus the right sidebar |
+| `Ctrl+B r` | Focus the right sidebar (press again to collapse) |
 | `Ctrl+B ]` / `{` | Cycle to next / previous popup |
 
 ### Popup Panes
@@ -184,7 +184,8 @@ Local state automatically gitignored by `init`. Stores `{ name, path, branch, cr
   "prefixKey": "C-b",
   "popupBindings": [
     { "key": "g", "command": "claude --dangerously-skip-permissions", "label": "claude" },
-    { "key": "x", "command": "codex --dangerously-bypass-approvals-and-sandbox", "label": "codex" }
+    { "key": "x", "command": "codex --dangerously-bypass-approvals-and-sandbox", "label": "codex" },
+    { "key": "l", "command": "lazygit", "label": "lazygit" }
   ]
 }
 ```

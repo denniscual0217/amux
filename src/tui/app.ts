@@ -395,11 +395,19 @@ export class TuiApp {
     }
     if (!this.rightSidebar.visible) {
       this.rightSidebar.visible = true;
+      this.rightSidebar.focused = true;
+      const activeIndex = this.visiblePopupId ? ids.indexOf(this.visiblePopupId) : -1;
+      this.rightSidebar.selectedIndex = activeIndex >= 0 ? activeIndex : ids.length - 1;
       this.syncPaneSizes();
       this.syncPopupSize();
-    }
-    this.rightSidebar.focused = !this.rightSidebar.focused;
-    if (this.rightSidebar.focused) {
+    } else if (this.rightSidebar.focused) {
+      // Already open & focused — pressing the binding again collapses it.
+      this.rightSidebar.visible = false;
+      this.rightSidebar.focused = false;
+      this.syncPaneSizes();
+      this.syncPopupSize();
+    } else {
+      this.rightSidebar.focused = true;
       const activeIndex = this.visiblePopupId ? ids.indexOf(this.visiblePopupId) : -1;
       this.rightSidebar.selectedIndex = activeIndex >= 0 ? activeIndex : ids.length - 1;
     }
