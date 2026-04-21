@@ -124,7 +124,7 @@ jobs:
             URL returned by `mcp__github_inline_comment__create_inline_comment`
             (format: `([inline](<url>))`). If the tool only returns a
             comment id, build the URL as
-            `https://github.com/${{ github.repository }}/pull/<pr>#discussion_r<id>`.
+            `https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}#discussion_r<id>`.
 
             Example:
 
