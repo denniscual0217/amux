@@ -844,13 +844,13 @@ export class TuiApp {
       return;
     }
 
-    if (chunk === "\u001b[A") {
+    if (chunk === "\u001b[A" || chunk === "k") {
       this.overlay.selectedIndex = Math.max(0, this.overlay.selectedIndex - 1);
       this.render();
       return;
     }
 
-    if (chunk === "\u001b[B") {
+    if (chunk === "\u001b[B" || chunk === "j") {
       this.overlay.selectedIndex = Math.min(this.overlay.items.length - 1, this.overlay.selectedIndex + 1);
       this.render();
       return;
@@ -1189,8 +1189,12 @@ export class TuiApp {
         ) ??
         -1;
       this.sidebar.selectedIndex = Math.max(0, activeIndex);
+    } else if (this.sidebar.focused) {
+      // Already open & focused — pressing the binding again collapses it.
+      this.sidebar.visible = false;
+      this.sidebar.focused = false;
     } else {
-      this.sidebar.focused = !this.sidebar.focused;
+      this.sidebar.focused = true;
     }
     this.syncPaneSizes();
     this.render();
