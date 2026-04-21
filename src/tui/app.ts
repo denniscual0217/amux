@@ -475,12 +475,10 @@ export class TuiApp {
         this.render();
         return true;
       case "\u001b[A":
-      case "\u000b": // Ctrl+K
       case "k":
         this.moveRightSidebarSelection(-1);
         return true;
       case "\u001b[B":
-      case "\u000a": // Ctrl+J
       case "j":
         this.moveRightSidebarSelection(1);
         return true;
@@ -983,12 +981,10 @@ export class TuiApp {
         this.render();
         return true;
       case "\u001b[A":
-      case "\u000b": // Ctrl+K
       case "k":
         this.moveSidebarSelection(-1);
         return true;
       case "\u001b[B":
-      case "\u000a": // Ctrl+J
       case "j":
         this.moveSidebarSelection(1);
         return true;
