@@ -51,6 +51,8 @@ export interface PopupRenderState {
   fullscreen: boolean;
   focused: boolean;
   screen: PaneScreenSnapshot | null;
+  /** When true, the popup rect renders the copy-mode buffer (scroll/select/yank) instead of the live pane screen. */
+  copyTargetsPopup?: boolean;
 }
 
 export interface RightSidebarItem {
@@ -331,7 +333,7 @@ export class TerminalRenderer {
       const buffer = state.paneBuffers.get(region.paneId) ?? { lines: [] };
       const paneScreen = state.paneScreens.get(region.paneId);
       const lines = buffer.lines;
-      const inCopyMode = state.copyMode.active && isActive;
+      const inCopyMode = state.copyMode.active && isActive && !state.popup?.copyTargetsPopup;
       const copyPlainLines = inCopyMode
         ? state.copyMode.plainLines.slice(
             0,
@@ -454,7 +456,56 @@ export class TerminalRenderer {
       screen.push(`${move(rect.y, rect.x + 2)}${border}${titleText}\u001B[0m`);
 
       const popupScreen = state.popup.screen;
-      if (popupScreen) {
+      if (state.popup.copyTargetsPopup && state.copyMode.active) {
+        const copyPlainLines = state.copyMode.plainLines.slice(
+          0,
+          Math.max(0, state.copyMode.plainLines.length - state.copyMode.scrollOffset),
+        );
+        const copyDisplayLines = state.copyMode.displayLines.slice(
+          0,
+          Math.max(0, state.copyMode.displayLines.length - state.copyMode.scrollOffset),
+        );
+        const visibleDisplayLines = copyDisplayLines.slice(-innerHeight);
+        const padStyledLine = (line: string): string => {
+          const plain = stripAnsiForWidth(line);
+          if (plain.length >= innerWidth) {
+            return line;
+          }
+          return `${line}${" ".repeat(innerWidth - plain.length)}`;
+        };
+        visibleDisplayLines.forEach((line, index) => {
+          screen.push(`${move(rect.y + 1 + index, rect.x + 1)}${padStyledLine(line)}`);
+        });
+
+        const selection = state.copyMode.getSelection();
+        const topAnchor = Math.max(0, copyPlainLines.length - innerHeight);
+        const cursorLine = clamp(state.copyMode.cursor.line - topAnchor, 0, innerHeight - 1);
+        const cursorColumn = clamp(state.copyMode.cursor.column, 0, innerWidth - 1);
+        if (selection) {
+          for (let lineIndex = selection.start.line; lineIndex <= selection.end.line; lineIndex += 1) {
+            const visibleIndex = lineIndex - topAnchor;
+            if (visibleIndex < 0 || visibleIndex >= innerHeight) {
+              continue;
+            }
+            const sourceLine = copyPlainLines[lineIndex] ?? "";
+            const startColumn = lineIndex === selection.start.line ? selection.start.column : 0;
+            const endColumn =
+              lineIndex === selection.end.line
+                ? Math.min(sourceLine.length, selection.end.column + 1)
+                : sourceLine.length;
+            const text = trimVisible(
+              sourceLine.slice(startColumn, endColumn),
+              Math.max(0, endColumn - startColumn),
+            );
+            screen.push(
+              `${move(rect.y + 1 + visibleIndex, rect.x + 1 + startColumn)}\u001B[7m${text}\u001B[0m`,
+            );
+          }
+        }
+        screen.push(
+          `${move(rect.y + 1 + cursorLine, rect.x + 1 + cursorColumn)}\u001B[7m${trimVisible(copyPlainLines[state.copyMode.cursor.line]?.[state.copyMode.cursor.column] ?? " ", 1)}\u001B[0m`,
+        );
+      } else if (popupScreen) {
         const lines = popupScreen.lines.slice(0, innerHeight).map((line) => {
           const plain = stripAnsiForWidth(line);
           if (plain.length >= innerWidth) {

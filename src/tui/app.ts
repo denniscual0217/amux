@@ -181,6 +181,8 @@ export class TuiApp {
   /** Most recently shown popup across all bindings — used as the default selection when focusing the agents sidebar. */
   private lastShownPopupId: string | null = null;
   private visiblePopupId: string | null = null;
+  /** Id of the popup that copy mode is currently reading — or null when copy mode targets the window pane. Cleared on exit. */
+  private copyModeTargetPopupId: string | null = null;
   private readonly rightSidebar = {
     visible: true,
     focused: false,
@@ -411,6 +413,7 @@ export class TuiApp {
       fullscreen: instance.fullscreen,
       focused: !this.sidebar.focused && !this.overlay && !this.prompt && !this.copyMode.active,
       screen: instance.screen,
+      copyTargetsPopup: this.copyMode.active && this.copyModeTargetPopupId === this.visiblePopupId,
     };
   }
 
@@ -770,6 +773,23 @@ export class TuiApp {
         }
         return;
       }
+      case "next-session":
+      case "previous-session": {
+        const sessions = this.manager.listSessions();
+        if (sessions.length <= 1) {
+          return;
+        }
+        const currentIndex = sessions.findIndex((candidate) => candidate.name === this.sessionName);
+        const delta = action.type === "next-session" ? 1 : -1;
+        const nextIndex = (currentIndex + delta + sessions.length) % sessions.length;
+        const next = sessions[nextIndex];
+        if (next && next.name !== this.sessionName) {
+          this.sessionName = next.name;
+          this.ensureSidebarState();
+          await this.refreshWindowState();
+        }
+        return;
+      }
       case "select-window":
         session.selectWindow(action.index);
         this.ensureSidebarState();
@@ -829,6 +849,22 @@ export class TuiApp {
         return;
       }
       case "copy-mode": {
+        if (this.visiblePopupId) {
+          const popup = this.popups.get(this.visiblePopupId);
+          if (popup) {
+            const snapshot = popup.pane.getCopyModeSnapshot();
+            this.copyMode.enter({
+              plainLines: snapshot.plainLines,
+              displayLines: snapshot.displayLines,
+              initialCursor: snapshot.initialCursor,
+              viewportRows: snapshot.viewportRows,
+            });
+            this.copyModeTargetPopupId = this.visiblePopupId;
+            this.render();
+            return;
+          }
+        }
+        this.copyModeTargetPopupId = null;
         const activePaneId = window.activePaneIdValue ?? window.listPanes()[0]?.id ?? 0;
         const activePane = window.listPanes().find((p) => p.id === activePaneId);
         if (activePane) {
@@ -849,6 +885,7 @@ export class TuiApp {
       }
       case "exit-copy-mode":
         this.copyMode.exit();
+        this.copyModeTargetPopupId = null;
         this.render();
         return;
     }
@@ -931,6 +968,7 @@ export class TuiApp {
         this.copyMode.copy();
         this.message = this.copyMode.clipboardOk ? "copied to clipboard" : "copied to internal buffer";
         this.copyMode.exit();
+        this.copyModeTargetPopupId = null;
         break;
       default:
         break;

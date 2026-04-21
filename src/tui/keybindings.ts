@@ -9,6 +9,8 @@ export type TuiAction =
   | { type: "new-window" }
   | { type: "next-window" }
   | { type: "previous-window" }
+  | { type: "next-session" }
+  | { type: "previous-session" }
   | { type: "select-window"; index: number }
   | { type: "split"; direction: "horizontal" | "vertical" }
   | { type: "move-focus"; direction: FocusDirection }
@@ -199,6 +201,12 @@ export class KeyBindingHandler extends EventEmitter {
         return;
       case "s":
         this.emit("action", { type: "session-picker" } satisfies TuiAction);
+        return;
+      case ")":
+        this.emit("action", { type: "next-session" } satisfies TuiAction);
+        return;
+      case "(":
+        this.emit("action", { type: "previous-session" } satisfies TuiAction);
         return;
       case "[":
       case "\r":
