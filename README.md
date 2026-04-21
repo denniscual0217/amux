@@ -1,6 +1,6 @@
-# amux — Terminal Multiplexer with First-Class Git Worktrees
+# amux — Terminal Multiplexer
 
-A terminal multiplexer built on top of `node-pty` with tmux-compatible keybindings, a collapsible session sidebar, and first-class git worktree management inspired by [workmux](https://workmux.raine.dev/). Think **tmux + workmux**, in one binary.
+A terminal multiplexer with tmux-compatible keybindings, a collapsible session sidebar, and first-class git worktree management inspired by [workmux](https://workmux.raine.dev/). Think **tmux + workmux**, in one binary.
 
 ## Features
 
@@ -8,8 +8,6 @@ A terminal multiplexer built on top of `node-pty` with tmux-compatible keybindin
 - **Collapsible sidebar** — tree of sessions and their windows; resizes the pane layout, not an overlay.
 - **First-class git worktrees** — create, open, and remove worktrees with a project-level YAML config. Each worktree can boot its own amux session.
 - **Popup panes** — floating windows over any layout for interactive commands, bound to configurable keys.
-- **Screenshots** — capture a session or full TUI layout as PNG.
-- **Session recording** — full scrollback persisted to disk with replay.
 - **Tags & metadata** — label sessions for filtering.
 
 ## Quick Start
@@ -65,7 +63,6 @@ amux stop
 | `amux write <session> "text"` | Send literal text to the active pane |
 | `amux send-keys <session> <key>…` | Send keypresses (`Enter`, `C-c`, `Escape`, `Tab`, `Space`, …) |
 | `amux kill <session>` | Kill a session |
-| `amux screenshot <session> [--tui] [-p <pane>] [-o FILE] [--cols N] [--rows N]` | Capture pane/TUI as PNG |
 | `amux help` | Full command reference |
 
 ### Git worktrees
@@ -213,20 +210,6 @@ Local state automatically gitignored by `init`. Stores `{ name, path, branch, cr
 
 Per-repo worktree config (see the [Git Worktrees](#git-worktrees) section). Written by `amux worktree init`.
 
-## Screenshots
-
-```bash
-# Raw pane content
-amux screenshot <session>
-amux screenshot <session> -p <pane> -o output.png
-
-# Full TUI layout (sidebar, borders, status bar)
-amux screenshot <session> --tui
-amux screenshot <session> --tui --cols 140 --rows 35
-```
-
-Default output: `/tmp/amux/screenshots/screenshot-<session>-<timestamp>.png`. Requires ImageMagick (`convert`) for SVG → PNG conversion.
-
 ## Comparison with tmux
 
 | Feature | tmux | amux |
@@ -236,8 +219,6 @@ Default output: `/tmp/amux/screenshots/screenshot-<session>-<timestamp>.png`. Re
 | Git worktree management | No | `amux worktree` (workmux-compatible) |
 | Output access | Screen buffer only | Full scrollback, raw lines |
 | ANSI stripping | No | Built-in |
-| Screenshots | No | PNG export (basic + full TUI) |
-| Session recording | No | Built-in with replay |
 | Tags/metadata | No | Per-session tags |
 | Output search | No | Built-in grep |
 
@@ -278,11 +259,9 @@ sudo ln -sf $(which amux) /usr/local/bin/amux
 ## Requirements
 
 - **Node.js** 22+
-- **node-pty** (compiles native — needs build tools: Xcode CLI on macOS, build-essential on Linux)
 - **git** 2.5+ (for worktree support)
-- **ImageMagick** (optional — for screenshots; `brew install imagemagick` / `apt install imagemagick`)
 - **gh** (optional — for `amux worktree add --pr`)
 
 ## License
 
-ISC
+[MIT](LICENSE)
