@@ -135,7 +135,7 @@ jobs:
             messages, shutdown signal handlers). The core idea is solid.
             A few issues need attention before merging.
 
-            ### Recommended
+            ### Recommended to check
 
             - **Self-triggering infinite loop in workflow** —
               `.github/workflows/ai-code-review.yml` lines 6–9. The
@@ -155,7 +155,7 @@ jobs:
               the pid in that branch.
               ([inline](https://github.com/owner/repo/pull/3#discussion_r3116877889))
 
-            ### Others
+            ### Nice to check
 
             - **Hardcoded 300 ms SIGTERM wait** — `src/cli.ts` line 325.
               A fixed 300 ms sleep after sending `SIGTERM` is unreliable
