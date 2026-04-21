@@ -55,6 +55,8 @@ interface PopupInstance {
   onExit: (event: PaneExitEvent) => void;
   createdAt: Date;
   exitCode: number | null;
+  /** Git repo root at the time the popup was spawned (for `reuseByRepo`). */
+  repoRoot?: string;
 }
 
 function createPaneBuffer(lines: string[] = []): PaneBuffer {
@@ -103,6 +105,25 @@ function displayLines(lines: string[]): string[] {
     buffer.lines.pop();
   }
   return buffer.lines;
+}
+
+/**
+ * Resolve a directory to its enclosing git repo root, or undefined if it
+ * isn't inside a git repository. Used by `reuseByRepo` popup bindings so
+ * per-repo tools (e.g. lazygit) reuse an existing popup within the same
+ * repo and spawn a fresh one when the user crosses a repo boundary.
+ */
+function getRepoRoot(cwd: string): string | undefined {
+  try {
+    const out = execSync("git rev-parse --show-toplevel", {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -155,6 +176,8 @@ export class TuiApp {
   private stopResolve: (() => void) | null = null;
   private readonly popups = new Map<string, PopupInstance>();
   private readonly popupCountersByKey = new Map<string, number>();
+  /** Remember the popup each binding-key last had on screen, so toggle reopens that one instead of the newest-created. */
+  private readonly lastVisibleIdByBinding = new Map<string, string>();
   private visiblePopupId: string | null = null;
   private readonly rightSidebar = {
     visible: true,
@@ -513,6 +536,7 @@ export class TuiApp {
       return;
     }
     this.visiblePopupId = id;
+    this.lastVisibleIdByBinding.set(instance.binding.key, id);
     this.rightSidebar.selectedIndex = index;
     this.message = `popup: ${this.formatPopupTitle(instance)}`;
     this.syncPopupSize();
@@ -1060,22 +1084,63 @@ export class TuiApp {
   private togglePopup(binding: PopupBinding): void {
     const visible = this.visiblePopupId ? this.popups.get(this.visiblePopupId) : null;
     if (visible && visible.binding.key === binding.key) {
+      // Hiding — remember which instance was on screen so the next toggle restores it.
+      this.lastVisibleIdByBinding.set(binding.key, visible.id);
       this.visiblePopupId = null;
       this.message = `popup hidden: ${this.formatPopupTitle(visible)}`;
       this.render();
       return;
     }
 
-    const existing = this.findLatestInstanceOfBinding(binding.key);
+    if (binding.reuseByRepo) {
+      const callerRepo = this.resolveCallerRepo();
+      const repoMatch = this.findInstanceInRepo(binding.key, callerRepo);
+      if (repoMatch) {
+        this.showPopup(repoMatch);
+        return;
+      }
+      // No existing popup for this repo — spawn a fresh one.
+      this.createPopupInstance(binding);
+      return;
+    }
+
+    const preferredId = this.lastVisibleIdByBinding.get(binding.key);
+    const preferred = preferredId ? this.popups.get(preferredId) : undefined;
+    const existing = preferred ?? this.findLatestInstanceOfBinding(binding.key);
     if (existing) {
-      this.visiblePopupId = existing.id;
-      this.message = `popup: ${this.formatPopupTitle(existing)}`;
-      this.syncPopupSize();
-      this.render();
+      this.showPopup(existing);
       return;
     }
 
     this.createPopupInstance(binding);
+  }
+
+  private showPopup(instance: PopupInstance): void {
+    this.visiblePopupId = instance.id;
+    this.lastVisibleIdByBinding.set(instance.binding.key, instance.id);
+    this.message = `popup: ${this.formatPopupTitle(instance)}`;
+    this.syncPopupSize();
+    this.render();
+  }
+
+  /** Resolve the repo root of the caller's active pane (following any `cd`s). */
+  private resolveCallerRepo(): string | undefined {
+    const activePane = this.currentWindow().activePane;
+    const liveCwd = activePane ? getProcessCwd(activePane.pid) : undefined;
+    const cwd = liveCwd ?? activePane?.cwd ?? this.currentSession().cwd ?? process.cwd();
+    return getRepoRoot(cwd);
+  }
+
+  /** Find any existing popup instance of the given binding whose spawn repo matches. */
+  private findInstanceInRepo(bindingKey: string, repoRoot: string | undefined): PopupInstance | null {
+    if (!repoRoot) return null;
+    let match: PopupInstance | null = null;
+    for (const instance of this.popups.values()) {
+      if (instance.binding.key !== bindingKey) continue;
+      if (instance.repoRoot !== repoRoot) continue;
+      if (!match || instance.ordinal > match.ordinal) match = instance;
+    }
+    return match;
   }
 
   private findLatestInstanceOfBinding(bindingKey: string): PopupInstance | null {
@@ -1124,6 +1189,7 @@ export class TuiApp {
       screen: pane.getScreenSnapshot(),
       createdAt: new Date(),
       exitCode: null,
+      repoRoot: getRepoRoot(cwd),
       onData: (_event: PaneDataEvent): void => {
         const current = this.popups.get(id);
         if (!current) {
@@ -1149,6 +1215,7 @@ export class TuiApp {
     pane.on("exit", entry.onExit);
     this.popups.set(id, entry);
     this.visiblePopupId = id;
+    this.lastVisibleIdByBinding.set(binding.key, id);
     this.rightSidebar.selectedIndex = this.popups.size - 1;
     this.message = `popup: ${this.formatPopupTitle(entry)}`;
     this.render();
@@ -1171,6 +1238,9 @@ export class TuiApp {
     this.popups.delete(id);
     if (this.visiblePopupId === id) {
       this.visiblePopupId = null;
+    }
+    if (this.lastVisibleIdByBinding.get(instance.binding.key) === id) {
+      this.lastVisibleIdByBinding.delete(instance.binding.key);
     }
   }
 

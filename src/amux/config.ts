@@ -23,6 +23,12 @@ export interface PopupBinding {
    * Use for tools like lazygit that are not agents.
    */
   hideInSidebar?: boolean;
+  /**
+   * If true, the toggle keybinding reuses an existing popup whose spawn
+   * repo matches the caller's current repo, and spawns a fresh instance
+   * when no match is found. Useful for per-repo tools like lazygit.
+   */
+  reuseByRepo?: boolean;
 }
 
 export interface AmuxConfig {
@@ -109,7 +115,7 @@ function getDefaults(): AmuxConfig {
     popupBindings: [
       { key: "g", command: "claude --dangerously-skip-permissions", label: "claude" },
       { key: "x", command: "codex --dangerously-bypass-approvals-and-sandbox", label: "codex" },
-      { key: "l", command: "lazygit", label: "lazygit", hideInSidebar: true },
+      { key: "l", command: "lazygit", label: "lazygit", hideInSidebar: true, reuseByRepo: true },
     ],
   };
 }
