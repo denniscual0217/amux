@@ -1,47 +1,39 @@
-# amux — Agent-Native Terminal Multiplexer
+# amux — Terminal Multiplexer with First-Class Git Worktrees
 
-A terminal multiplexer built for both humans and AI agents. Like tmux, but with a structured JSON API over Unix sockets so agents can spawn processes, read output, and manage sessions programmatically.
+A terminal multiplexer built on top of `node-pty` with tmux-compatible keybindings, a collapsible session sidebar, and first-class git worktree management inspired by [workmux](https://workmux.raine.dev/). Think **tmux + workmux**, in one binary.
 
-## Why amux?
+## Features
 
-Traditional terminal multiplexers (tmux, screen) were built for humans. Agents interacting with them must scrape screen buffers and send raw keystrokes. amux provides:
-
-- **JSON API** — structured commands over a Unix socket, no screen scraping
-- **Clean output** — `tail` returns raw text lines with optional ANSI stripping
-- **TUI with sidebar** — collapsible session tree, tmux-compatible keybindings
-- **Screenshots** — capture terminal sessions as PNG images
-- **Exit callbacks** — get notified via HTTP POST when a process exits
-- **Session recording** — full output history persisted to disk with replay
-- **Tags & metadata** — label sessions by agent, task, project for easy filtering
+- **Full tmux-like TUI** — sessions, windows, panes, splits, zoom, copy mode, with vim/arrow navigation.
+- **Collapsible sidebar** — tree of sessions and their windows; resizes the pane layout, not an overlay.
+- **First-class git worktrees** — create, open, and remove worktrees with a project-level YAML config. Each worktree can boot its own amux session.
+- **Popup panes** — floating windows over any layout for interactive commands, bound to configurable keys.
+- **Screenshots** — capture a session or full TUI layout as PNG.
+- **Session recording** — full scrollback persisted to disk with replay.
+- **Tags & metadata** — label sessions for filtering.
 
 ## Quick Start
 
 ```bash
-# Install dependencies & build
+# Install & build
 npm install
 npm run build
 npm link    # makes `amux` available globally
 
-# Start the daemon
-amux start
+# Start the daemon (background)
+amux start -d
 
-# Spawn a process
-amux spawn -s my-task -e "npm test" --cwd /project
+# Launch the TUI (auto-starts the daemon if needed)
+amux
 
-# Check output
-amux tail my-task --lines 20
+# Start a session in the current directory
+amux new my-task
 
-# List sessions
-amux list
-
-# Attach TUI
-amux attach -t my-task
-
-# Take a screenshot
-amux screenshot my-task --tui
-
-# Kill a session
-amux kill my-task
+# Git worktrees
+amux worktree init                  # write .amux.yaml at repo root
+amux worktree add feature-x         # create worktree + branch + attached session
+amux worktree list
+amux worktree remove feature-x      # fails on dirty; --force to override
 
 # Stop the daemon
 amux stop
@@ -49,30 +41,50 @@ amux stop
 
 ## CLI Commands
 
+### Daemon control
+
 | Command | Description |
 |---------|-------------|
-| `amux start` | Start the daemon (foreground) |
-| `amux start -d` | Start the daemon (background) |
+| `amux` | Launch the TUI (auto-starts daemon) |
+| `amux start` | Start daemon in the foreground |
+| `amux start -d` | Start daemon in the background |
 | `amux stop` | Stop the daemon |
 | `amux restart` | Restart the daemon (background) |
 | `amux status` | Show daemon + session status |
-| `amux spawn -s <name> -e <cmd>` | Create session & run command |
-| `amux list` | List all sessions |
-| `amux tail <session> [--lines N] [--strip-ansi]` | Get pane output |
-| `amux write <session> "text"` | Send input to a session |
+| `amux install` / `uninstall` | Install/remove the `amux` binary symlink |
+
+### Sessions & panes
+
+| Command | Description |
+|---------|-------------|
+| `amux new [name]` | Create a session at `cwd` and attach (TTY only) |
+| `amux spawn -s <name> -e <cmd> [--cwd DIR] [--input TEXT]` | Create a session and run a command |
+| `amux attach -t <session>` | Attach the TUI to an existing session |
+| `amux list` | List sessions |
+| `amux tail <session> [--lines N] [--strip-ansi]` | Print recent pane output |
+| `amux write <session> "text"` | Send literal text to the active pane |
+| `amux send-keys <session> <key>…` | Send keypresses (`Enter`, `C-c`, `Escape`, `Tab`, `Space`, …) |
 | `amux kill <session>` | Kill a session |
-| `amux attach -t <session>` | Attach TUI to a session |
-| `amux stream <session>` | Live stream output (WebSocket) |
-| `amux screenshot <session> [--tui] [-o file.png]` | Capture session as PNG |
-| `amux help` | Show all commands |
+| `amux screenshot <session> [--tui] [-p <pane>] [-o FILE] [--cols N] [--rows N]` | Capture pane/TUI as PNG |
+| `amux help` | Full command reference |
+
+### Git worktrees
+
+| Command | Description |
+|---------|-------------|
+| `amux worktree init [--force]` | Write `.amux.yaml` at the repo root (and append `/.amux/` to `.gitignore`) |
+| `amux worktree add <branch>` | Create a worktree + branch, copy/symlink configured files, auto-open an amux session |
+| `amux worktree add --pr <num>` | Check out an existing GitHub PR into a new worktree (uses `gh` + `git fetch origin pull/<num>/head`) |
+| `amux worktree open <name>` | Re-open/attach a session for an existing worktree (e.g. after a reboot) |
+| `amux worktree remove <name> [--force]` | Remove the worktree (fails on uncommitted changes; `--force` overrides). The branch is preserved. |
+| `amux worktree remove --all [--force]` | Remove every amux-managed worktree |
+| `amux worktree list` | List amux-managed worktrees (name, branch, path) |
 
 ## TUI Mode
 
-Attach to a session with `amux attach -t <session>` for a full terminal UI with tmux-compatible keybindings.
+Launch the TUI with `amux` (or `amux attach -t <session>` for a specific session). All keybindings use `Ctrl+B` as the prefix by default (`Ctrl+A` also works).
 
 ### Sidebar
-
-A collapsible sidebar shows all sessions in a tree layout with expandable windows:
 
 ```
 ▸ dev
@@ -84,163 +96,92 @@ A collapsible sidebar shows all sessions in a tree layout with expandable window
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+b b` | Toggle sidebar open/closed |
-| `↑`/`↓` or `j`/`k` | Navigate sessions/windows (when sidebar focused) |
-| `Enter` | Switch to selected session/window |
+| `Ctrl+B b` | Toggle sidebar visibility |
+| `Ctrl+B f` | Focus the sidebar (press again to collapse) |
+| `↑`/`↓` or `j`/`k` | Navigate sessions/windows (when focused) |
+| `Enter` | Switch to the selected session/window |
 | `Escape` | Return focus to panes |
 
 The sidebar is a real layout column — panes resize when it toggles.
 
 ### Keybindings (tmux-compatible)
 
-All keybindings use `Ctrl+b` as the prefix (configurable).
-
 | Key | Action |
 |-----|--------|
-| `Ctrl+b d` | Detach |
-| `Ctrl+b c` | New window |
-| `Ctrl+b n` / `p` | Next / previous window |
-| `Ctrl+b 0-9` | Select window by number |
-| `Ctrl+b "` | Split horizontal |
-| `Ctrl+b %` | Split vertical |
-| `Ctrl+b ↑↓←→` | Navigate panes |
-| `Ctrl+b h/j/k/l` | Navigate panes (vim) |
-| `Ctrl+b x` | Kill pane |
-| `Ctrl+b z` | Zoom/unzoom pane |
-| `Ctrl+b ,` | Rename window |
-| `Ctrl+b $` | Rename session |
-| `Ctrl+b w` | Window picker |
-| `Ctrl+b s` | Session picker |
-| `Ctrl+b [` | Enter copy mode |
-| `Ctrl+b g` | Toggle claude popup pane (default binding) |
-| `Ctrl+b x` | Toggle codex popup pane (default binding) |
-| `Ctrl+b G` / `X` | Spawn a **new** instance of that popup's binding |
-| `Ctrl+b F` | Toggle fullscreen for the visible popup |
-| `Ctrl+b K` | Kill the visible popup pane |
-| `Ctrl+b B` | Toggle the right sidebar (popup list) |
-| `Ctrl+b r` | Focus the right sidebar (navigate with ↑/↓/j/k, Enter to activate, Esc to unfocus) |
-| `Ctrl+b ]` / `{` | Cycle to next / previous popup |
+| `Ctrl+B d` | Detach |
+| `Ctrl+B c` | New window |
+| `Ctrl+B n` / `p` | Next / previous window |
+| `Ctrl+B 0-9` | Select window by number |
+| `Ctrl+B "` | Split horizontal |
+| `Ctrl+B %` | Split vertical |
+| `Ctrl+B ↑↓←→` | Navigate panes |
+| `Ctrl+B h/j/k/l` | Navigate panes (vim) |
+| `Ctrl+B x` | Kill pane |
+| `Ctrl+B z` | Zoom/unzoom pane |
+| `Ctrl+B ,` | Rename window |
+| `Ctrl+B $` | Rename session |
+| `Ctrl+B w` | Window picker (`j`/`k` or arrows to navigate, `Enter` to select) |
+| `Ctrl+B s` | Session picker |
+| `Ctrl+B [` | Enter copy mode |
+| `Ctrl+B g` / `x` | Toggle configured popup panes (default bindings) |
+| `Ctrl+B G` / `X` | Spawn a **new** instance of that popup's binding |
+| `Ctrl+B F` | Toggle fullscreen for the visible popup |
+| `Ctrl+B K` | Kill the visible popup pane |
+| `Ctrl+B B` | Toggle the right sidebar (popup list) |
+| `Ctrl+B r` | Focus the right sidebar |
+| `Ctrl+B ]` / `{` | Cycle to next / previous popup |
 
-### Popup panes
+### Popup Panes
 
-Popup panes float over the current window layout — like modal dialogs on top of nvim or any other program — and run any interactive command you like. The popup inherits the current pane's `cwd` (falls back to the session's `cwd`). Prefix keys still work from inside the popup.
+Popup panes float over the current window layout — like modal dialogs on top of nvim or any other program — and run any interactive command you bind. The popup inherits the current pane's `cwd` (falls back to the session's `cwd`). Prefix keys still work from inside the popup.
 
-- **Lowercase binding key** (`Ctrl+b g`) — toggle hide/show of the most recent instance. Creates one if none exists. The process keeps running when hidden.
-- **Uppercase binding key** (`Ctrl+b G`) — always spawn a new instance. Multiple instances of the same binding can coexist.
-- `Ctrl+b K` — explicitly kill the visible popup.
+- **Lowercase binding key** (e.g. `Ctrl+B g`) — toggle hide/show of the most recent instance; creates one if none exists. The process keeps running while hidden.
+- **Uppercase binding key** (`Ctrl+B G`) — always spawn a new instance. Multiple instances of the same binding can coexist.
+- `Ctrl+B K` — kill the visible popup.
 
-The right sidebar (auto-shown when popups exist) lists every live popup: `●` = visible, `○` = hidden, `✗` = exited. Instance counters appear when multiple copies of a binding are running (e.g., `g·1`, `g·2`).
+The right sidebar (auto-shown when popups exist) lists every live popup: `●` = visible, `○` = hidden, `✗` = exited. Instance counters appear when multiple copies of a binding are running (e.g. `g·1`, `g·2`).
 
-Configure bindings in `~/.amux/config.json`:
+## Git Worktrees
 
-```json
-{
-  "popupBindings": [
-    { "key": "g", "command": "claude --dangerously-skip-permissions", "label": "claude" },
-    { "key": "x", "command": "codex --dangerously-bypass-approvals-and-sandbox", "label": "codex" }
-  ]
-}
+`amux worktree` is a lightweight workmux-compatible layer on top of `git worktree`. Every amux-created worktree is tracked in a registry so it survives daemon restarts and laptop reboots — `amux worktree list` and `amux worktree open <name>` work as long as the worktree directory still exists.
+
+### Project config — `.amux.yaml`
+
+Written at the repo root by `amux worktree init`. Intended to be committed so teammates share the same conventions. All keys are optional; defaults match workmux:
+
+```yaml
+# Directory where worktrees are created (relative to repo root or absolute).
+# Default: sibling directory "<repo>-amux-worktrees".
+# worktree_dir: ../myrepo-amux-worktrees
+
+# Primary branch to branch off from.
+# Default: auto-detected from origin/HEAD, falling back to main / master.
+# main_branch: main
+
+# File operations when creating a worktree.
+files:
+  # Files copied into each new worktree — useful for per-worktree env files.
+  copy:
+    - .env
+    - .env.local
+
+  # Files or directories symlinked into each new worktree — saves disk space.
+  symlink: []
 ```
 
-Each entry binds a single lowercase character (after the prefix) to a command. The uppercase variant of the same letter always spawns a **new** instance, so `Ctrl+b g` toggles the most recent claude popup and `Ctrl+b G` opens a second one in parallel.
+### Registry — `.amux/worktrees.json`
 
-## Screenshots
-
-Capture terminal sessions as PNG images with `amux screenshot`.
-
-### Basic (raw pane content)
-```bash
-amux screenshot <session>
-amux screenshot <session> -p <pane> -o output.png
-```
-
-### Full TUI layout
-```bash
-# Renders sidebar, pane borders, content, and status bar
-amux screenshot <session> --tui
-
-# Custom terminal dimensions
-amux screenshot <session> --tui --cols 140 --rows 35
-```
-
-Default output: `/tmp/amux/screenshots/screenshot-<session>-<timestamp>.png`
-
-Requires ImageMagick (`convert`) for SVG → PNG conversion.
-
-## Socket Protocol
-
-amux listens on a Unix socket (default: `/tmp/amux.sock`) for newline-delimited JSON messages. Responses are `{"ok": true, "data": ...}` or `{"ok": false, "error": "..."}`.
-
-### Core Commands
-
-```json
-{"cmd": "spawn", "session": "build-42", "exec": "npm run build", "cwd": "/project"}
-{"cmd": "list"}
-{"cmd": "tail", "session": "build-42", "lines": 10, "stripAnsi": true}
-{"cmd": "write", "session": "build-42", "data": "y\n"}
-{"cmd": "kill", "session": "build-42"}
-{"cmd": "grep", "session": "build-42", "pattern": "error", "lastLines": 100}
-{"cmd": "diff", "session": "build-42", "pane": 0}
-{"cmd": "screenshot", "session": "build-42", "tui": true, "cols": 120, "rows": 30}
-```
-
-### Session/Window/Pane Management
-
-```json
-{"cmd": "create-session", "session": "work"}
-{"cmd": "create-window", "session": "work", "name": "logs"}
-{"cmd": "split", "session": "work", "direction": "horizontal"}
-{"cmd": "select-window", "session": "work", "id": 1}
-{"cmd": "select-pane", "session": "work", "pane": 1}
-{"cmd": "kill-pane", "session": "work", "pane": 0}
-{"cmd": "toggle-zoom", "session": "work"}
-```
-
-### Tags & Filtering
-
-```json
-{"cmd": "spawn", "session": "codex-42", "exec": "codex", "tags": {"agent": "codex", "project": "bogs"}}
-{"cmd": "list", "filter": {"tag": "agent=codex"}}
-```
-
-### Templates
-
-```json
-{"cmd": "template-save", "name": "dev-layout", "session": "my-session"}
-{"cmd": "template-apply", "name": "dev-layout"}
-{"cmd": "template-list"}
-```
-
-### Spawn Options
-
-| Option | Description |
-|--------|-------------|
-| `session` | Session name (required) |
-| `exec` | Command to run (required) |
-| `cwd` | Working directory |
-| `env` | Environment variables `{"KEY": "value"}` |
-| `input` | Input to send after spawn |
-| `onExit` | URL to POST when process exits |
-| `tags` | Key-value metadata `{"agent": "codex"}` |
-| `window` | Window name |
-
-### Exit Callback Payload
-
-When a process exits with `onExit` set, amux POSTs:
-```json
-{"session": "codex-42", "pane": 0, "exitCode": 0, "lastOutput": "...", "duration": "2m30s"}
-```
+Local state automatically gitignored by `init`. Stores `{ name, path, branch, createdAt }` per worktree.
 
 ## Configuration
 
-Config file: `~/.amux/config.json`
+### Global config — `~/.amux/config.json`
 
 ```json
 {
-  "socketPath": "/tmp/amux.sock",
-  "streamPort": 7777,
   "recordingEnabled": false,
   "recordingsDir": "~/.amux/recordings",
+  "retentionDays": 30,
   "defaultShell": "/usr/bin/zsh",
   "defaultEnv": {},
   "prefixKey": "C-b",
@@ -251,57 +192,54 @@ Config file: `~/.amux/config.json`
 }
 ```
 
-### Shell Detection
+| Field | Description |
+|-------|-------------|
+| `recordingEnabled` | Persist pane output to disk (default `false`) |
+| `recordingsDir` | Where recordings live (default `~/.amux/recordings`) |
+| `retentionDays` | Auto-delete recordings older than N days; `0` disables (default `30`) |
+| `defaultShell` | Shell for new panes. See "Shell Detection" below. |
+| `defaultEnv` | Env merged into every pane (`{ "KEY": "value" }`) |
+| `prefixKey` | TUI prefix key — `C-b`, `C-a`, etc. |
+| `popupBindings` | Popup pane bindings — each entry `{ key, command, label, env? }` |
 
-amux detects the default shell in this order:
+#### Shell Detection
+
 1. `defaultShell` from `~/.amux/config.json` (if set)
-2. Login shell from `/etc/passwd` (same as tmux)
+2. Login shell via `dscl` on macOS, `/etc/passwd` on Linux
 3. `$SHELL` environment variable
-4. `/bin/sh` as final fallback
+4. `/bin/sh` as a final fallback
+
+### Project config — `.amux.yaml`
+
+Per-repo worktree config (see the [Git Worktrees](#git-worktrees) section). Written by `amux worktree init`.
+
+## Screenshots
+
+```bash
+# Raw pane content
+amux screenshot <session>
+amux screenshot <session> -p <pane> -o output.png
+
+# Full TUI layout (sidebar, borders, status bar)
+amux screenshot <session> --tui
+amux screenshot <session> --tui --cols 140 --rows 35
+```
+
+Default output: `/tmp/amux/screenshots/screenshot-<session>-<timestamp>.png`. Requires ImageMagick (`convert`) for SVG → PNG conversion.
 
 ## Comparison with tmux
 
 | Feature | tmux | amux |
 |---------|------|------|
 | Human TUI | Yes | Yes |
-| Collapsible sidebar | No | Tree-style with sessions/windows |
-| Programmatic API | No (send-keys hacks) | JSON over Unix socket |
+| Collapsible sidebar | No | Tree of sessions/windows |
+| Git worktree management | No | `amux worktree` (workmux-compatible) |
 | Output access | Screen buffer only | Full scrollback, raw lines |
 | ANSI stripping | No | Built-in |
 | Screenshots | No | PNG export (basic + full TUI) |
-| Exit callbacks | No | HTTP POST on exit |
 | Session recording | No | Built-in with replay |
 | Tags/metadata | No | Per-session tags |
 | Output search | No | Built-in grep |
-| Output diffing | No | "What's new since last check" |
-
-## Agent Integration Example
-
-```typescript
-import { connect } from 'net';
-
-const sock = connect('/tmp/amux.sock');
-
-// Spawn a Codex agent
-sock.write(JSON.stringify({
-  cmd: 'spawn',
-  session: 'codex-42',
-  exec: 'codex --full-auto',
-  cwd: '/project',
-  tags: { agent: 'codex', task: 'fix-login-bug' },
-  onExit: { url: 'http://localhost:3000/agent-done' }
-}) + '\n');
-
-// Poll output (clean, no ANSI)
-setInterval(() => {
-  sock.write(JSON.stringify({
-    cmd: 'tail',
-    session: 'codex-42',
-    lines: 5,
-    stripAnsi: true
-  }) + '\n');
-}, 5000);
-```
 
 ## Installation
 
@@ -325,12 +263,14 @@ export PATH="$(npm bin -g):$PATH"
 ```
 
 **If using nvm**, the path changes per Node version. Add this to `~/.zshrc` instead:
+
 ```bash
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 ```
 
 Alternatively, create a permanent symlink:
+
 ```bash
 sudo ln -sf $(which amux) /usr/local/bin/amux
 ```
@@ -339,7 +279,9 @@ sudo ln -sf $(which amux) /usr/local/bin/amux
 
 - **Node.js** 22+
 - **node-pty** (compiles native — needs build tools: Xcode CLI on macOS, build-essential on Linux)
-- **ImageMagick** (for screenshots only — `brew install imagemagick` / `apt install imagemagick`)
+- **git** 2.5+ (for worktree support)
+- **ImageMagick** (optional — for screenshots; `brew install imagemagick` / `apt install imagemagick`)
+- **gh** (optional — for `amux worktree add --pr`)
 
 ## License
 

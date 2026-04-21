@@ -1,7 +1,7 @@
 {
   "name": "amux",
   "version": "0.1.0",
-  "description": "Agent-native terminal multiplexer — like tmux, but with a JSON API for AI agents",
+  "description": "Terminal multiplexer with first-class git worktree management — tmux + workmux in one binary",
   "main": "dist/server.js",
   "bin": {
     "amux": "dist/cli.js"
@@ -19,7 +19,9 @@
     "terminal",
     "multiplexer",
     "tmux",
-    "agent",
+    "worktree",
+    "workmux",
+    "git",
     "pty",
     "cli"
   ],
