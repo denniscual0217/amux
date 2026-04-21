@@ -245,17 +245,18 @@ async function handleWorktreeCommand(args: string[]): Promise<void> {
   if (sub === "add") {
     const prArg = takeOption(args, ["--pr"]);
     const nameArg = takeOption(args, ["--name"]);
+    let entry;
     if (prArg) {
       const prNumber = Number.parseInt(prArg, 10);
       if (Number.isNaN(prNumber)) throw new Error("--pr must be a number");
-      const { entry } = await addWorktree(process.cwd(), { prNumber, name: nameArg });
-      console.log(`created ${entry.path} (branch ${entry.branch})`);
-      return;
+      ({ entry } = await addWorktree(process.cwd(), { prNumber, name: nameArg }));
+    } else {
+      const branch = args.shift();
+      if (!branch) throw new Error("worktree add requires <branch> or --pr <number>");
+      ({ entry } = await addWorktree(process.cwd(), { branch, name: nameArg }));
     }
-    const branch = args.shift();
-    if (!branch) throw new Error("worktree add requires <branch> or --pr <number>");
-    const { entry } = await addWorktree(process.cwd(), { branch, name: nameArg });
     console.log(`created ${entry.path} (branch ${entry.branch})`);
+    await openWorktreeSession(entry);
     return;
   }
 
@@ -281,26 +282,33 @@ async function handleWorktreeCommand(args: string[]): Promise<void> {
     if (!fs.existsSync(entry.path)) {
       throw new Error(`worktree path no longer exists: ${entry.path}`);
     }
-    await ensureServerRunning();
-    try {
-      await send({ cmd: "get-session", session: entry.name });
-    } catch {
-      await send({
-        cmd: "create-session",
-        session: entry.name,
-        exec: getDefaultShell(),
-        cwd: entry.path,
-      });
-    }
-    if (process.stdout.isTTY) {
-      await attachSession(entry.name);
-    } else {
-      console.log(`session ${entry.name} ready at ${entry.path}`);
-    }
+    await openWorktreeSession(entry);
     return;
   }
 
   throw new Error(`unknown worktree subcommand: ${sub}`);
+}
+
+async function openWorktreeSession(entry: { name: string; path: string }): Promise<void> {
+  if (!fs.existsSync(entry.path)) {
+    throw new Error(`worktree path no longer exists: ${entry.path}`);
+  }
+  await ensureServerRunning();
+  try {
+    await send({ cmd: "get-session", session: entry.name });
+  } catch {
+    await send({
+      cmd: "create-session",
+      session: entry.name,
+      exec: getDefaultShell(),
+      cwd: entry.path,
+    });
+  }
+  if (process.stdout.isTTY) {
+    await attachSession(entry.name);
+  } else {
+    console.log(`session ${entry.name} ready at ${entry.path}`);
+  }
 }
 
 function printWorktreeUsage(): void {
