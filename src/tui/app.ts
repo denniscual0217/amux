@@ -198,6 +198,13 @@ export class TuiApp {
     private readonly options: TuiAppOptions = {},
   ) {}
 
+  /** When the daemon has no sessions left, free popup memory (agents + lazygit). */
+  private readonly onSessionsEmpty = (): void => {
+    if (this.popups.size === 0) return;
+    this.killAllPopups();
+    this.render();
+  };
+
   public start(size: { cols: number; rows: number }): void {
     this.renderer.resize(size.cols, size.rows);
     this.refreshSessionState();
@@ -208,6 +215,7 @@ export class TuiApp {
     this.keybindings.on("action", (action: TuiAction) => {
       void this.handleAction(action);
     });
+    this.manager.on("empty", this.onSessionsEmpty);
 
     this.writeFrame(this.renderer.enterAlternateScreen());
     if (this.options.showSessionPicker) {
@@ -231,6 +239,7 @@ export class TuiApp {
     }
 
     this.active = false;
+    this.manager.off("empty", this.onSessionsEmpty);
     this.unbindPanes();
     this.killAllPopups();
     this.writeFrame(this.renderer.leaveAlternateScreen());

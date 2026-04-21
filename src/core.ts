@@ -1041,7 +1041,7 @@ export class Session {
   }
 }
 
-export class SessionManager {
+export class SessionManager extends EventEmitter {
   private static instanceValue: SessionManager | null = null;
   private readonly sessions = new Map<string, Session>();
 
@@ -1099,7 +1099,11 @@ export class SessionManager {
       session.destroyWindow(window.name);
     }
 
-    return this.sessions.delete(name);
+    const removed = this.sessions.delete(name);
+    if (removed && this.sessions.size === 0) {
+      this.emit("empty");
+    }
+    return removed;
   }
 
   public renameSession(name: string, nextName: string): Session {
