@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -84,6 +84,19 @@ function defaultScreenshotPath(session: string): string {
   fs.mkdirSync(dir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   return path.resolve(dir, `screenshot-${sanitizeFileSegment(session)}-${timestamp}.png`);
+}
+
+function killDaemonHoldingSocket(socketPath: string): void {
+  // Cross-platform (macOS/Linux) replacement for `fuser -k`, which is Linux-only
+  // and silently no-ops on macOS — leaving zombie daemons that still hold ports.
+  let pids = "";
+  try {
+    pids = execSync(`lsof -t ${socketPath} 2>/dev/null`, { encoding: "utf8" }).trim();
+  } catch { /* no holders */ }
+  if (!pids) return;
+  for (const pid of pids.split(/\s+/).filter(Boolean)) {
+    try { process.kill(Number(pid), "SIGTERM"); } catch { /* ignore */ }
+  }
 }
 
 async function send<T = unknown>(request: ApiRequest): Promise<T> {
@@ -289,12 +302,7 @@ async function main(): Promise<void> {
     const socketPath = getSocketPath();
     try {
       await send({ cmd: "list" }); // check if running
-      const fs = await import("node:fs");
-      // Find and kill the daemon process
-      const { execSync } = await import("node:child_process");
-      try {
-        execSync(`fuser -k ${socketPath} 2>/dev/null`, { stdio: "ignore" });
-      } catch { /* ignore */ }
+      killDaemonHoldingSocket(socketPath);
       try { fs.unlinkSync(socketPath); } catch { /* ignore */ }
       console.log("amux stopped");
     } catch {
@@ -306,15 +314,9 @@ async function main(): Promise<void> {
   if (command === "restart") {
     const socketPath = getSocketPath();
     // Stop
-    try {
-      const { execSync } = await import("node:child_process");
-      try {
-        execSync(`fuser -k ${socketPath} 2>/dev/null`, { stdio: "ignore" });
-      } catch { /* ignore */ }
-      const fs = await import("node:fs");
-      try { fs.unlinkSync(socketPath); } catch { /* ignore */ }
-      await new Promise((r) => setTimeout(r, 1000));
-    } catch { /* wasn't running */ }
+    killDaemonHoldingSocket(socketPath);
+    try { fs.unlinkSync(socketPath); } catch { /* ignore */ }
+    await new Promise((r) => setTimeout(r, 1000));
     // Start as detached daemon
     const cliPath = process.argv[1];
     const child = spawn(process.execPath, [cliPath, "start"], {
