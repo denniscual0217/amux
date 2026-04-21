@@ -168,8 +168,8 @@ const BOX = {
   vertical: "│",
 } as const;
 
-const BORDER_INACTIVE = "\u001B[38;5;244m";
-const BORDER_ACTIVE = "\u001B[38;5;159m";
+const BORDER_INACTIVE = "\u001B[38;5;240m";
+const BORDER_ACTIVE = "\u001B[38;5;240m";
 const BORDER_POPUP_FOCUSED = "\u001B[38;5;213m";
 const BORDER_POPUP_HIDDEN = "\u001B[38;5;244m";
 const BORDER_OVERLAY = "\u001B[38;5;248m";
