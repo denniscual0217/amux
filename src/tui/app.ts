@@ -178,6 +178,8 @@ export class TuiApp {
   private readonly popupCountersByKey = new Map<string, number>();
   /** Remember the popup each binding-key last had on screen, so toggle reopens that one instead of the newest-created. */
   private readonly lastVisibleIdByBinding = new Map<string, string>();
+  /** Most recently shown popup across all bindings — used as the default selection when focusing the agents sidebar. */
+  private lastShownPopupId: string | null = null;
   private visiblePopupId: string | null = null;
   private readonly rightSidebar = {
     visible: true,
@@ -457,8 +459,7 @@ export class TuiApp {
     if (!this.rightSidebar.visible) {
       this.rightSidebar.visible = true;
       this.rightSidebar.focused = true;
-      const activeIndex = this.visiblePopupId ? ids.indexOf(this.visiblePopupId) : -1;
-      this.rightSidebar.selectedIndex = activeIndex >= 0 ? activeIndex : ids.length - 1;
+      this.rightSidebar.selectedIndex = this.defaultSidebarSelection(ids);
       this.syncPaneSizes();
       this.syncPopupSize();
     } else if (this.rightSidebar.focused) {
@@ -469,10 +470,23 @@ export class TuiApp {
       this.syncPopupSize();
     } else {
       this.rightSidebar.focused = true;
-      const activeIndex = this.visiblePopupId ? ids.indexOf(this.visiblePopupId) : -1;
-      this.rightSidebar.selectedIndex = activeIndex >= 0 ? activeIndex : ids.length - 1;
+      this.rightSidebar.selectedIndex = this.defaultSidebarSelection(ids);
     }
     this.render();
+  }
+
+  /**
+   * Compute the default sidebar row to highlight:
+   * 1. currently-visible popup, if any, else
+   * 2. the most recently shown popup still in the sidebar, else
+   * 3. the newest-created entry (last row).
+   */
+  private defaultSidebarSelection(ids: string[]): number {
+    const activeIndex = this.visiblePopupId ? ids.indexOf(this.visiblePopupId) : -1;
+    if (activeIndex >= 0) return activeIndex;
+    const lastShownIndex = this.lastShownPopupId ? ids.indexOf(this.lastShownPopupId) : -1;
+    if (lastShownIndex >= 0) return lastShownIndex;
+    return ids.length - 1;
   }
 
   private cyclePopup(delta: number): void {
@@ -537,6 +551,7 @@ export class TuiApp {
     }
     this.visiblePopupId = id;
     this.lastVisibleIdByBinding.set(instance.binding.key, id);
+    this.lastShownPopupId = id;
     this.rightSidebar.selectedIndex = index;
     this.message = `popup: ${this.formatPopupTitle(instance)}`;
     this.syncPopupSize();
@@ -1118,6 +1133,7 @@ export class TuiApp {
   private showPopup(instance: PopupInstance): void {
     this.visiblePopupId = instance.id;
     this.lastVisibleIdByBinding.set(instance.binding.key, instance.id);
+    this.lastShownPopupId = instance.id;
     this.message = `popup: ${this.formatPopupTitle(instance)}`;
     this.syncPopupSize();
     this.render();
@@ -1216,6 +1232,7 @@ export class TuiApp {
     this.popups.set(id, entry);
     this.visiblePopupId = id;
     this.lastVisibleIdByBinding.set(binding.key, id);
+    this.lastShownPopupId = id;
     this.rightSidebar.selectedIndex = this.popups.size - 1;
     this.message = `popup: ${this.formatPopupTitle(entry)}`;
     this.render();
@@ -1241,6 +1258,9 @@ export class TuiApp {
     }
     if (this.lastVisibleIdByBinding.get(instance.binding.key) === id) {
       this.lastVisibleIdByBinding.delete(instance.binding.key);
+    }
+    if (this.lastShownPopupId === id) {
+      this.lastShownPopupId = null;
     }
   }
 
