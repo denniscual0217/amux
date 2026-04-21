@@ -388,6 +388,7 @@ export class TuiApp {
   private buildRightSidebarState(): RightSidebarState {
     const items: RightSidebarItem[] = [];
     for (const instance of this.popups.values()) {
+      if (instance.binding.hideInSidebar) continue;
       const hasSiblings = this.countInstancesOfBinding(instance.binding.key) > 1;
       const keyLabel = hasSiblings ? `${instance.binding.key}·${instance.ordinal}` : instance.binding.key;
       items.push({
@@ -416,8 +417,15 @@ export class TuiApp {
     return [...this.popups.keys()];
   }
 
+  /** Popups that appear in the right "agents" sidebar — excludes `hideInSidebar` entries. */
+  private listSidebarPopupIds(): string[] {
+    return [...this.popups.entries()]
+      .filter(([, instance]) => !instance.binding.hideInSidebar)
+      .map(([id]) => id);
+  }
+
   private toggleRightSidebarFocus(): void {
-    const ids = this.listPopupIds();
+    const ids = this.listSidebarPopupIds();
     if (ids.length === 0) {
       this.message = "no popups to navigate";
       this.render();
@@ -455,7 +463,7 @@ export class TuiApp {
   }
 
   private handleRightSidebarInput(chunk: string): boolean {
-    const ids = this.listPopupIds();
+    const ids = this.listSidebarPopupIds();
     if (ids.length === 0) {
       this.rightSidebar.focused = false;
       this.render();
@@ -467,10 +475,12 @@ export class TuiApp {
         this.render();
         return true;
       case "\u001b[A":
+      case "\u000b": // Ctrl+K
       case "k":
         this.moveRightSidebarSelection(-1);
         return true;
       case "\u001b[B":
+      case "\u000a": // Ctrl+J
       case "j":
         this.moveRightSidebarSelection(1);
         return true;
@@ -485,7 +495,7 @@ export class TuiApp {
   }
 
   private moveRightSidebarSelection(delta: number): void {
-    const ids = this.listPopupIds();
+    const ids = this.listSidebarPopupIds();
     if (ids.length === 0) {
       return;
     }
@@ -495,7 +505,7 @@ export class TuiApp {
   }
 
   private activatePopupByIndex(index: number): void {
-    const ids = this.listPopupIds();
+    const ids = this.listSidebarPopupIds();
     const id = ids[index];
     if (!id) {
       return;
@@ -973,10 +983,12 @@ export class TuiApp {
         this.render();
         return true;
       case "\u001b[A":
+      case "\u000b": // Ctrl+K
       case "k":
         this.moveSidebarSelection(-1);
         return true;
       case "\u001b[B":
+      case "\u000a": // Ctrl+J
       case "j":
         this.moveSidebarSelection(1);
         return true;

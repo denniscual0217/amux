@@ -17,6 +17,12 @@ export interface PopupBinding {
   label?: string;
   /** Extra env vars merged into the popup pane. */
   env?: Record<string, string>;
+  /**
+   * If true, popups created from this binding are hidden from the right
+   * "agents" sidebar list (but still toggleable via the prefix keybinding).
+   * Use for tools like lazygit that are not agents.
+   */
+  hideInSidebar?: boolean;
 }
 
 export interface AmuxConfig {
@@ -103,7 +109,7 @@ function getDefaults(): AmuxConfig {
     popupBindings: [
       { key: "g", command: "claude --dangerously-skip-permissions", label: "claude" },
       { key: "x", command: "codex --dangerously-bypass-approvals-and-sandbox", label: "codex" },
-      { key: "l", command: "lazygit", label: "lazygit" },
+      { key: "l", command: "lazygit", label: "lazygit", hideInSidebar: true },
     ],
   };
 }
