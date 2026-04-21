@@ -71,6 +71,8 @@ jobs:
                `mcp__github_inline_comment__create_inline_comment` tool.**
                Do this BEFORE writing the summary. One inline comment per
                finding, anchored to the specific line in the diff.
+               **Capture the URL (or comment id) returned by the tool for
+               each inline comment — you will link to it from the summary.**
             5. After all inline comments are posted, post a single
                top-level summary comment (via `gh pr comment`) that
                references the already-posted inline findings, grouped
@@ -117,7 +119,12 @@ jobs:
               refactors, low-impact suggestions, optional improvements).
 
             Omit either section if it has no findings. Each bullet must
-            correspond to an inline comment you already posted.
+            correspond to an inline comment you already posted, and must
+            end with a markdown link back to that inline comment using the
+            URL returned by `mcp__github_inline_comment__create_inline_comment`
+            (format: `([inline](<url>))`). If the tool only returns a
+            comment id, build the URL as
+            `https://github.com/${{ github.repository }}/pull/<pr>#discussion_r<id>`.
 
             Example:
 
@@ -138,6 +145,7 @@ jobs:
               creating a runaway loop that burns API quota and workflow
               minutes on every PR. Fix by removing these two triggers or
               adding `if: github.actor != 'github-actions[bot]'` on the job.
+              ([inline](https://github.com/owner/repo/pull/3#discussion_r3116877888))
             - **EPERM silently treated as "no process"** — `src/server.ts`
               line 34. `process.kill(pid, 0)` throws `EPERM` when the
               target process exists but belongs to a different OS user.
@@ -145,6 +153,7 @@ jobs:
               "process is dead". Fix: check
               `(e as NodeJS.ErrnoException).code === 'EPERM'` and return
               the pid in that branch.
+              ([inline](https://github.com/owner/repo/pull/3#discussion_r3116877889))
 
             ### Others
 
@@ -153,13 +162,16 @@ jobs:
               on slow hosts or under load. Replace with a polling loop
               that checks `process.kill(pid, 0)` until it throws or a
               deadline (e.g. 3 s) is reached.
+              ([inline](https://github.com/owner/repo/pull/3#discussion_r3116877890))
             - **Unnecessary `id-token: write` permission** —
               `.github/workflows/ai-code-review.yml` line 25. This
               workflow only reads code and writes PR comments; OIDC
               federation is not used. Remove to follow least-privilege.
+              ([inline](https://github.com/owner/repo/pull/3#discussion_r3116877891))
             - **Dynamic `import("node:fs")` shadows static import** —
               `src/cli.ts` line 308. `fs` is already imported at the top
               of the file; delete the dynamic import.
+              ([inline](https://github.com/owner/repo/pull/3#discussion_r3116877892))
             ```
 
             Formatting rules:
@@ -168,6 +180,8 @@ jobs:
             - Each finding is a single `-` bullet.
             - First sentence of each bullet: **bolded short title** — then
               the file path and line(s).
+            - Every bullet MUST end with `([inline](<url>))` pointing to
+              the inline comment created for that finding.
             - Keep bullets to one short paragraph; no sub-bullets, no code
               fences in the summary (code examples belong in the inline
               comments).
