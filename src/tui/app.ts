@@ -1,4 +1,6 @@
 import process from "node:process";
+import { execSync } from "node:child_process";
+import fs from "node:fs";
 import { loadConfig, type PopupBinding } from "../amux/config.js";
 import {
   Pane as PaneImpl,
@@ -101,6 +103,34 @@ function displayLines(lines: string[]): string[] {
     buffer.lines.pop();
   }
   return buffer.lines;
+}
+
+/**
+ * Read the current working directory of a running process, following any
+ * `cd` commands the user has run inside a pane's shell. Falls back to the
+ * pane's initial cwd when the query fails.
+ *
+ * Linux: /proc/<pid>/cwd is a symlink to the cwd.
+ * macOS: lsof exposes the cwd of an open file descriptor.
+ */
+function getProcessCwd(pid: number): string | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  const procLink = `/proc/${pid}/cwd`;
+  try {
+    if (fs.existsSync(procLink)) {
+      return fs.readlinkSync(procLink);
+    }
+  } catch { /* ignore */ }
+  try {
+    const out = execSync(`lsof -a -p ${pid} -d cwd -Fn`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const line = out.split("\n").find((l) => l.startsWith("n"));
+    return line ? line.slice(1) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export class TuiApp {
@@ -1056,7 +1086,8 @@ export class TuiApp {
     const innerCols = Math.max(1, rect.width - 2);
     const innerRows = Math.max(1, rect.height - 2);
     const activePane = this.currentWindow().activePane;
-    const cwd = activePane?.cwd ?? this.currentSession().cwd ?? process.cwd();
+    const liveCwd = activePane ? getProcessCwd(activePane.pid) : undefined;
+    const cwd = liveCwd ?? activePane?.cwd ?? this.currentSession().cwd ?? process.cwd();
     let pane: Pane;
     try {
       pane = new PaneImpl(0, this.sessionName, binding.command, {
