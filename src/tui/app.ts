@@ -324,6 +324,8 @@ export class TuiApp {
     }
   }
 
+  private readonly dirtyPanes = new Set<number>();
+
   private bindCurrentWindow(): void {
     this.unbindPanes();
     const window = this.currentWindow();
@@ -332,7 +334,9 @@ export class TuiApp {
         const buffer = this.paneBuffers.get(pane.id) ?? createPaneBuffer();
         appendChunk(buffer, event.chunk);
         this.paneBuffers.set(pane.id, buffer);
-        this.paneScreens.set(pane.id, pane.getScreenSnapshot());
+        // Snapshot is expensive (renders every cell). Defer to the render tick
+        // so a burst of chunks (e.g. a paste) only triggers one snapshot.
+        this.dirtyPanes.add(pane.id);
         this.render();
       };
       const onExit = (event: PaneExitEvent): void => {
@@ -363,6 +367,14 @@ export class TuiApp {
     // Batch renders within the same tick to avoid flicker
     setImmediate(() => {
       this.renderPending = false;
+      if (this.dirtyPanes.size > 0) {
+        const panes = new Map(this.currentWindow().listPanes().map((p) => [p.id, p]));
+        for (const paneId of this.dirtyPanes) {
+          const pane = panes.get(paneId);
+          if (pane) this.paneScreens.set(paneId, pane.getScreenSnapshot());
+        }
+        this.dirtyPanes.clear();
+      }
       this.writeFrame(
         this.renderer.render({
           session: this.currentSnapshot(),
