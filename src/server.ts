@@ -92,8 +92,10 @@ export class AmuxServer {
         this.server?.listen(socketPath, () => resolve());
       });
 
-      this.streamServer = new AmuxStreamServer();
-      await this.streamServer.start(streamPort);
+      if (loadConfig().streamEnabled) {
+        this.streamServer = new AmuxStreamServer();
+        await this.streamServer.start(streamPort);
+      }
 
     } catch (error) {
       if (this.server) {
