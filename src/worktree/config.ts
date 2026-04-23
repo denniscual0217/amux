@@ -88,6 +88,12 @@ export async function loadProjectConfig(cwd?: string): Promise<WorktreeProjectCo
 
   const mainBranch = raw.main_branch ?? (await detectMainBranch(projectRoot));
 
+  const streamEnabled = (() => {
+    if (raw.stream_enabled === undefined) return false;
+    if (typeof raw.stream_enabled === "boolean") return raw.stream_enabled;
+    throw new Error(`${CONFIG_FILENAME}: "stream_enabled" must be a boolean`);
+  })();
+
   return {
     projectRoot,
     worktreeDir,
@@ -96,7 +102,7 @@ export async function loadProjectConfig(cwd?: string): Promise<WorktreeProjectCo
       copy: raw.files?.copy ?? [],
       symlink: raw.files?.symlink ?? [],
     },
-    streamEnabled: raw.stream_enabled ?? false,
+    streamEnabled,
   };
 }
 
