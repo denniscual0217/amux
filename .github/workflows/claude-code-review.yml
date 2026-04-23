@@ -14,6 +14,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: '${{ github.workflow }}-review-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}'
+  cancel-in-progress: true
+
 jobs:
   ai-review:
     name: Check:AI-Review
@@ -31,7 +35,7 @@ jobs:
     steps:
       - name: Resolve PR branch for issue_comment
         if: github.event_name == 'issue_comment'
-        uses: xt0rted/pull-request-comment-branch@v2
+        uses: xt0rted/pull-request-comment-branch@v2.0.0
         id: comment-branch
 
       - name: Checkout project
@@ -50,8 +54,9 @@ jobs:
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
 
-            You are an expert code reviewer reviewing a GitHub pull request
-            for this repository.
+            You are an expert code reviewer with deep expertise in software
+            engineering best practices, security analysis, and code quality
+            assessment.
 
             Use the checked-out repository and git history to inspect the
             pull request diff. Focus on issues that are legitimate,
@@ -81,10 +86,10 @@ jobs:
             ## Priority labels
 
             Every finding must have exactly one priority label:
-            - `[P0]` — urgent / critical: bugs that corrupt data, security
+            - `[P0]` — high priority: bugs that corrupt data, security
               vulnerabilities, crashes, broken behavior, data loss.
-            - `[P1]` — everything else: high, medium, or low impact
-              improvements (perf, error handling, minor refactors, style).
+            - `[P1]` — medium priority: everything else (perf, error
+              handling, minor refactors, style).
 
             ## Workflow
 
@@ -99,7 +104,22 @@ jobs:
 
             ## Inline comment format
 
-            **[P0] Short title**  (or **[P1] Short title**)
+            Use a colored badge for the priority, followed by the finding
+            description. No title line.
+
+            For P0:
+            ![P0 – High Priority](https://img.shields.io/badge/P0-High%20Priority-red)
+
+            Description of the issue and why it matters.
+
+            **Proposed solution (optional)**:
+
+            ```<lang>
+            fixed_code_example
+            ```
+
+            For P1:
+            ![P1 – Medium Priority](https://img.shields.io/badge/P1-Medium%20Priority-orange)
 
             Description of the issue and why it matters.
 
@@ -111,33 +131,87 @@ jobs:
 
             ## Summary format
 
-            Start with a short overview of what the PR changes and the
-            overall verdict. Then list every finding as a flat `-` bullet
-            — no sections, no grouping.
+            Write a top-level summary comment with this exact structure:
 
-            Each bullet must start with the priority label, include the
-            file and line, and end with a link to the inline comment. If
-            the tool only returns a comment id, build the URL as
-            `https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}#discussion_r<id>`.
+            ## 🔍 Review Summary
+
+            ## 💬 General Feedback (optional — omit if there is nothing
+            meaningful to add beyond the inline comments)
 
             Example:
 
             ```markdown
-            This PR adds X and Y. The core idea is solid; a few issues
-            need attention before merging.
+            ## 🔍 Review Summary
+            This PR introduces automated code review via GitHub Actions,
+            improving the team's ability to catch issues early. The
+            changes are well-structured, but one configuration issue
+            should be resolved before merging.
 
-            - **[P0] EPERM silently treated as "no process"** —
-              `src/server.ts:34`.
-              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r222))
-            - **[P1] Hardcoded 300 ms SIGTERM wait** — `src/cli.ts:325`.
-              ([Comment link](https://github.com/owner/repo/pull/3#discussion_r333))
+            ## 💬 General Feedback
+            - The new CI workflow is a valuable addition to the pipeline.
+            - The PR also includes minor refactoring in the RoB Calendar
+              components for better layout consistency.
             ```
-
-            Formatting rules:
-            - Each bullet: `**[P0] Title**` or `**[P1] Title**` — file:line.
-            - Every bullet ends with `([Comment link](<url>))`.
-            - No sections, no sub-bullets, no code fences in the summary.
           claude_args: |
-            --max-turns 15
+            --max-turns 40
             --allowedTools "Read,Glob,Grep,Edit,Write,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git status:*),Bash(git diff:*)"
+
+      - name: Post review summary to Slack
+        if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'ready_for_review')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_REVIEW_WEBHOOK_URL }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_URL="${{ github.event.pull_request.html_url }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+
+          FULL_COMMENT=$(gh pr view "$PR_NUMBER" \
+            --json comments \
+            --jq '[.comments[] | select(.body | contains("## 🔍 Review Summary"))] | last | .body // ""')
+
+          SUMMARY=$(echo "$FULL_COMMENT" | sed -n '/## 🔍 Review Summary/,$p')
+
+          if [ -z "$SUMMARY" ]; then
+            exit 0
+          fi
+
+          ESCAPED=$(echo "$SUMMARY" | python3 -c "
+          import sys, json
+          print(json.dumps(sys.stdin.read()))
+          ")
+
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-type: application/json' \
+            --data "{
+              \"blocks\": [
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*AI Code Review:* <$PR_URL|$PR_TITLE> by $AUTHOR\"
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": $ESCAPED
+                  }
+                },
+                {
+                  \"type\": \"divider\"
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"_To fix issues, reply in this thread:_ \`@Claude fix <issue> in PR #$PR_NUMBER in ${{ github.repository }} — push to the PR branch, no new PR\`\"
+                  }
+                }
+              ]
+            }"
+
+
 

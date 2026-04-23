@@ -479,6 +479,11 @@ async function main(): Promise<void> {
     if (!session) {
       throw new Error("stream requires <session>");
     }
+    const { loadProjectConfig } = await import("./worktree/config.js");
+    const projectConfig = await loadProjectConfig().catch(() => null);
+    if (!projectConfig?.streamEnabled) {
+      throw new Error('streaming is disabled for this repo — set "stream_enabled: true" in .amux.yaml');
+    }
 
     const paneValue = takeOption(args, ["--pane"]);
     const pane = paneValue ? Number.parseInt(paneValue, 10) : 0;

@@ -36,6 +36,8 @@ export interface AmuxConfig {
   socketPath: string;
   /** Port for the WebSocket streaming server. Default: 7777 */
   streamPort: number;
+  /** Enable the WebSocket streaming server. Default: false */
+  streamEnabled: boolean;
   /** Enable session recording to disk. Default: false */
   recordingEnabled: boolean;
   /** Directory for session recordings. Default: ~/.amux/recordings */
@@ -106,6 +108,7 @@ function getDefaults(): AmuxConfig {
   return {
     socketPath: '/tmp/amux.sock',
     streamPort: 7777,
+    streamEnabled: false,
     recordingEnabled: false,
     recordingsDir: join(homedir(), '.amux', 'recordings'),
     retentionDays: 30,
