@@ -24,6 +24,8 @@ export interface WorktreeProjectConfig {
   mainBranch: string;
   /** File operations applied when a worktree is created. */
   files: WorktreeFilesConfig;
+  /** Enable WebSocket streaming for this project. Default: false */
+  streamEnabled: boolean;
 }
 
 export const CONFIG_FILENAME = ".amux.yaml";
@@ -34,6 +36,7 @@ interface RawConfig {
   worktree_dir?: string;
   main_branch?: string;
   files?: { copy?: string[]; symlink?: string[] };
+  stream_enabled?: boolean;
 }
 
 export async function findProjectRoot(cwd: string = process.cwd()): Promise<string> {
@@ -93,6 +96,7 @@ export async function loadProjectConfig(cwd?: string): Promise<WorktreeProjectCo
       copy: raw.files?.copy ?? [],
       symlink: raw.files?.symlink ?? [],
     },
+    streamEnabled: raw.stream_enabled ?? false,
   };
 }
 
@@ -110,6 +114,10 @@ export function renderInitTemplate(projectRoot: string): string {
 # Primary branch to branch off from.
 # Default: auto-detected from origin/HEAD, falling back to main/master.
 # main_branch: main
+
+# Enable WebSocket streaming (amux stream) for this project.
+# Default: false
+# stream_enabled: true
 
 # File operations when creating a worktree.
 files:
