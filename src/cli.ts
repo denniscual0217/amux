@@ -475,6 +475,11 @@ async function main(): Promise<void> {
   }
 
   if (command === "stream") {
+    const { loadProjectConfig } = await import("./worktree/config.js");
+    const projectConfig = await loadProjectConfig();
+    if (!projectConfig.streamEnabled) {
+      throw new Error('streaming is disabled — set "stream_enabled: true" in .amux.yaml');
+    }
     const session = args.shift();
     if (!session) {
       throw new Error("stream requires <session>");
