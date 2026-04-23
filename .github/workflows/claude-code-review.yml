@@ -167,9 +167,11 @@ jobs:
           PR_TITLE="${{ github.event.pull_request.title }}"
           AUTHOR="${{ github.event.pull_request.user.login }}"
 
-          SUMMARY=$(gh pr view "$PR_NUMBER" \
+          FULL_COMMENT=$(gh pr view "$PR_NUMBER" \
             --json comments \
-            --jq '[.comments[] | select(.body | startswith("## 🔍 Review Summary"))] | last | .body // ""')
+            --jq '[.comments[] | select(.body | contains("## 🔍 Review Summary"))] | last | .body // ""')
+
+          SUMMARY=$(echo "$FULL_COMMENT" | sed -n '/## 🔍 Review Summary/,$p')
 
           if [ -z "$SUMMARY" ]; then
             exit 0
