@@ -36,7 +36,7 @@
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
-    "simple-git": "^3.36.0",
+    "simple-git": "^4.0.1",
     "typescript": "^5.9.3",
     "ws": "^8.19.0",
     "yaml": "^2.8.3"
